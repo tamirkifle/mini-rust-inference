@@ -1,0 +1,31 @@
+[package]
+name = "llm-inference-engine"
+version = "0.1.0"
+edition = "2021"
+authors = ["Tamir Yirga"]
+description = "Educational LLM inference engine in Rust - Llama 7B on consumer hardware"
+repository = "https://github.com/tamiryirga/llm-inference-engine"
+license = "MIT"
+keywords = ["llm", "inference", "transformer", "rust", "simd"]
+categories = ["science", "algorithms"]
+
+[lib]
+name = "llm_engine"
+path = "src/lib.rs"
+
+[[bin]]
+name = "llm"
+path = "src/bin/main.rs"
+
+[dependencies]
+
+[dev-dependencies]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[profile.bench]
+inherits = "release"
+debug = true
