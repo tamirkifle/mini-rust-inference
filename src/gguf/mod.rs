@@ -55,14 +55,18 @@
 mod dtype;
 mod error;
 mod header;
+mod loader;
 mod metadata;
+mod mmap;
 mod quantization;
 mod tensor_info;
 
 pub use dtype::GgmlType;
 pub use error::{GgufError, Result};
 pub use header::{GgufHeader, GGUF_MAGIC, SUPPORTED_VERSIONS};
+pub use loader::{inspect, GgufInspection, GgufLoader, GgufLoaderBuilder};
 pub use metadata::{keys, GgufValueType, Metadata, MetadataValue};
+pub use mmap::{MappedFile, MappedSlice};
 pub use quantization::{
     f16_to_f32, f32_to_f16, BlockQ4_0, BlockQ4_1, BlockQ5_0, BlockQ5_1, BlockQ8_0, BlockQ8_1,
     QK_K, QK_LEGACY,
@@ -265,5 +269,18 @@ mod tests {
     fn test_alignment_utilities() {
         assert_eq!(align_offset(100, DEFAULT_ALIGNMENT as u64), 128);
         assert_eq!(padding_for_alignment(100, DEFAULT_ALIGNMENT as u64), 28);
+    }
+
+    #[test]
+    fn test_mapped_file_and_loader_integration() {
+        // Verify that MappedFile and MappedSlice are exported
+        fn _check_types(_mf: MappedFile, _ms: MappedSlice) {}
+
+        // Verify GgufLoader and related types are exported
+        fn _check_loader_types(
+            _l: GgufLoader,
+            _b: GgufLoaderBuilder,
+            _i: GgufInspection,
+        ) {}
     }
 }
