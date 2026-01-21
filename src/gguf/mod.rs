@@ -52,13 +52,20 @@
 //! - [GGUF Specification](https://github.com/ggerganov/ggml/blob/master/docs/gguf.md)
 //! - [llama.cpp](https://github.com/ggerganov/llama.cpp)
 
+mod dtype;
 mod error;
 mod header;
 mod metadata;
+mod quantization;
 
+pub use dtype::GgmlType;
 pub use error::{GgufError, Result};
 pub use header::{GgufHeader, GGUF_MAGIC, SUPPORTED_VERSIONS};
 pub use metadata::{keys, GgufValueType, Metadata, MetadataValue};
+pub use quantization::{
+    f16_to_f32, f32_to_f16, BlockQ4_0, BlockQ4_1, BlockQ5_0, BlockQ5_1, BlockQ8_0, BlockQ8_1,
+    QK_K, QK_LEGACY,
+};
 
 // Re-export reader utilities for use by other modules (tensor_info, etc.)
 pub(crate) use header::{
@@ -209,5 +216,32 @@ mod tests {
         assert_eq!(keys::GENERAL_ARCHITECTURE, "general.architecture");
         assert_eq!(keys::LLAMA_BLOCK_COUNT, "llama.block_count");
         assert_eq!(keys::LLAMA_EMBEDDING_LENGTH, "llama.embedding_length");
+    }
+
+    #[test]
+    fn test_ggml_type_sizes() {
+        // Verify type sizes match expected values
+        assert_eq!(GgmlType::F32.tensor_size(100), 400);
+        assert_eq!(GgmlType::F16.tensor_size(100), 200);
+        assert_eq!(GgmlType::Q4_0.tensor_size(32), 18);
+        assert_eq!(GgmlType::Q8_0.tensor_size(32), 34);
+    }
+
+    #[test]
+    fn test_quantization_block_sizes() {
+        // Verify block constants match type definitions
+        assert_eq!(QK_LEGACY, GgmlType::Q4_0.block_size());
+        assert_eq!(QK_LEGACY, GgmlType::Q8_0.block_size());
+        assert_eq!(QK_K, GgmlType::Q4K.block_size());
+    }
+
+    #[test]
+    fn test_f16_roundtrip() {
+        let values = [0.0f32, 1.0, -1.0, 0.5, 100.0];
+        for v in values {
+            let h = f32_to_f16(v);
+            let back = f16_to_f32(h);
+            assert!((v - back).abs() < 0.01, "Failed for {v}");
+        }
     }
 }
