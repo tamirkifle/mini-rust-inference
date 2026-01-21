@@ -35,7 +35,9 @@
 //! assert_eq!(tensor.get(&[1, 2]), Some(&6.0));
 //! ```
 
+mod debug;
 mod error;
+mod io;
 mod layout;
 mod ops;
 mod shape;
@@ -43,7 +45,9 @@ mod storage;
 mod stride;
 mod view;
 
+pub use debug::{format_tensor, PrintOptions, TensorStats};
 pub use error::{Result, TensorError};
+pub use io::{load_tensor, read_tensor, save_tensor, write_tensor, DType};
 pub use layout::Layout;
 pub use ops::{broadcast_shapes, ShapeOps};
 pub use shape::Shape;
