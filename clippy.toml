@@ -1,0 +1,26 @@
+# Clippy configuration
+# https://doc.rust-lang.org/clippy/
+
+# Note: Most clippy configuration is done via attributes in code or CI flags
+# This file documents our lint policy
+
+# In lib.rs/main.rs, we'll add:
+# #![warn(clippy::all)]
+# #![warn(clippy::pedantic)]
+# #![warn(clippy::nursery)]
+# #![allow(clippy::module_name_repetitions)]
+# #![allow(clippy::must_use_candidate)]
+
+# CI runs with these flags:
+# cargo clippy -- -D warnings -W clippy::all -W clippy::pedantic
+
+# Performance-critical lints we care about:
+# - clippy::inefficient_to_string
+# - clippy::large_types_passed_by_value
+# - clippy::needless_collect
+# - clippy::unnecessary_wraps
+
+# Numerical code lints:
+# - clippy::cast_possible_truncation
+# - clippy::cast_precision_loss
+# - clippy::cast_sign_loss

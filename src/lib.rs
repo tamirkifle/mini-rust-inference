@@ -12,6 +12,12 @@
 //! - `quant`: Quantization (INT8/INT4) for memory efficiency
 //! - `simd`: SIMD-accelerated kernels (AVX2/NEON)
 
+#![warn(clippy::all)]
+#![warn(clippy::pedantic)]
+#![warn(clippy::nursery)]
+#![allow(clippy::module_name_repetitions)]
+#![allow(clippy::must_use_candidate)]
+
 // Module declarations will be added as we build each component
 // pub mod tensor;
 // pub mod gguf;
