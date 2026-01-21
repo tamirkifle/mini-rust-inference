@@ -14,12 +14,16 @@
 
 #![warn(clippy::all)]
 #![warn(clippy::pedantic)]
-#![warn(clippy::nursery)]
 #![allow(clippy::module_name_repetitions)]
 #![allow(clippy::must_use_candidate)]
 
-// Module declarations will be added as we build each component
-// pub mod tensor;
+// Module declarations
+pub mod tensor;
+
+// Re-exports for convenience
+pub use tensor::{Shape, Stride, Tensor};
+
+// Future modules
 // pub mod gguf;
 // pub mod ops;
 // pub mod model;
