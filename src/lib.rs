@@ -21,7 +21,7 @@
 pub mod tensor;
 
 // Re-exports for convenience
-pub use tensor::{Shape, Stride, Tensor};
+pub use tensor::{Shape, Stride, Tensor, TensorView};
 
 // Future modules
 // pub mod gguf;

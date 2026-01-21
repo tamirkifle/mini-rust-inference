@@ -38,12 +38,16 @@
 mod error;
 mod layout;
 mod shape;
+mod storage;
 mod stride;
+mod view;
 
 pub use error::{Result, TensorError};
 pub use layout::Layout;
 pub use shape::Shape;
+pub use storage::{BorrowedStorage, OwnedStorage, Storage};
 pub use stride::Stride;
+pub use view::TensorView;
 
 use std::fmt;
 
