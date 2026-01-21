@@ -57,6 +57,7 @@ mod error;
 mod header;
 mod metadata;
 mod quantization;
+mod tensor_info;
 
 pub use dtype::GgmlType;
 pub use error::{GgufError, Result};
@@ -65,6 +66,10 @@ pub use metadata::{keys, GgufValueType, Metadata, MetadataValue};
 pub use quantization::{
     f16_to_f32, f32_to_f16, BlockQ4_0, BlockQ4_1, BlockQ5_0, BlockQ5_1, BlockQ8_0, BlockQ8_1,
     QK_K, QK_LEGACY,
+};
+pub use tensor_info::{
+    align_offset, padding_for_alignment, TensorInfo, TensorInfos, TensorSummary,
+    DEFAULT_ALIGNMENT,
 };
 
 // Re-export reader utilities for use by other modules (tensor_info, etc.)
@@ -243,5 +248,22 @@ mod tests {
             let back = f16_to_f32(h);
             assert!((v - back).abs() < 0.01, "Failed for {v}");
         }
+    }
+
+    #[test]
+    fn test_tensor_info_integration() {
+        // Test that tensor info works with dtype size calculations
+        let dtype = GgmlType::Q4_0;
+        let numel = 4096 * 4096; // 16M elements
+
+        // Verify size calculation
+        let expected_size = dtype.tensor_size(numel);
+        assert_eq!(expected_size, (numel / 32) * 18); // 32 elements per block, 18 bytes per block
+    }
+
+    #[test]
+    fn test_alignment_utilities() {
+        assert_eq!(align_offset(100, DEFAULT_ALIGNMENT as u64), 128);
+        assert_eq!(padding_for_alignment(100, DEFAULT_ALIGNMENT as u64), 28);
     }
 }
