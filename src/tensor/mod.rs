@@ -37,6 +37,7 @@
 
 mod error;
 mod layout;
+mod ops;
 mod shape;
 mod storage;
 mod stride;
@@ -44,6 +45,7 @@ mod view;
 
 pub use error::{Result, TensorError};
 pub use layout::Layout;
+pub use ops::{broadcast_shapes, ShapeOps};
 pub use shape::Shape;
 pub use storage::{BorrowedStorage, OwnedStorage, Storage};
 pub use stride::Stride;
