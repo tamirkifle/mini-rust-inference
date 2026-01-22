@@ -1,140 +1,84 @@
-# LLM Inference Engine
+# Minimal LLM Inference Engine
 
-A production-quality LLM inference engine built from scratch in Rust. Designed to run Llama 7B at competitive speeds on consumer hardware.
+A from-scratch implementation of an LLM inference engine in Rust, designed to load and run Llama-family models on consumer hardware.
 
-## Goals
-
-- **Educational**: Deep understanding of transformer architectures and systems programming
-- **Performant**: SIMD vectorization, INT8/INT4 quantization, cache-optimized algorithms
-- **Portable**: Runs on x86 (AVX2) and ARM (NEON) without external dependencies
+> **Status:** Work in progress — core tensor system and GGUF parser complete, inference pipeline in development.
 
 ## Features
 
-| Feature | Status |
-|---------|--------|
-| GGUF model loading | 🚧 Planned |
-| Tensor operations | 🚧 Planned |
-| Multi-head attention | 🚧 Planned |
-| KV-cache | 🚧 Planned |
-| INT8 quantization | 🚧 Planned |
-| SIMD kernels (AVX2/NEON) | 🚧 Planned |
-| Speculative decoding | 📋 Extension |
+### Tensor System
+- Generic N-dimensional tensor implementation with shape and stride abstractions
+- Memory-efficient views for slicing and reshaping without copying
+- Standard operations: element-wise math, matrix multiplication, broadcasting
 
-## Quick Start
+### GGUF Parser
+- Full GGUF v2/v3 format support with memory-mapped I/O for efficient large file handling
+- Metadata extraction (model architecture, tokenizer config, hyperparameters)
+- Tensor information parsing with automatic alignment handling
 
-```bash
-# Build
-cargo build --release
+### Quantization Support
+- **F32/F16**: Direct extraction and half-precision conversion
+- **Q8_0**: 8-bit block quantization (32 elements/block, ~2x compression)
+- **Q4_0**: 4-bit block quantization (32 elements/block, ~4x compression)
 
-# Run inference
-./target/release/llm generate \
-    --model models/tinyllama-1.1b.gguf \
-    --prompt "Once upon a time"
+### Performance
+- LRU tensor cache with configurable memory limits
+- Preloading strategies (eager, lazy, selective pattern matching)
+- Zero-copy memory mapping for model files
 
-# Inspect model
-./target/release/llm inspect --model models/llama-7b.gguf
-```
+## Usage
 
-## Architecture
+```rust
+use llm_engine::gguf::{GgufLoader, TensorExtractor};
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                      CLI / API                          │
-├─────────────────────────────────────────────────────────┤
-│                   Generation Loop                       │
-│              (sampling, token decode)                   │
-├─────────────────────────────────────────────────────────┤
-│                  Model (Llama)                          │
-│    ┌─────────┐  ┌─────────┐  ┌─────────┐              │
-│    │ Embed   │→ │ Blocks  │→ │ LM Head │              │
-│    └─────────┘  └────┬────┘  └─────────┘              │
-│                      │                                  │
-│         ┌────────────┼────────────┐                    │
-│         ▼            ▼            ▼                    │
-│    ┌─────────┐  ┌─────────┐  ┌─────────┐              │
-│    │  Attn   │  │   FFN   │  │  Norm   │              │
-│    └─────────┘  └─────────┘  └─────────┘              │
-├─────────────────────────────────────────────────────────┤
-│                  Operations Layer                       │
-│   matmul │ softmax │ RoPE │ RMSNorm │ SiLU            │
-├─────────────────────────────────────────────────────────┤
-│                  Compute Backends                       │
-│        ┌──────────┬──────────┬──────────┐             │
-│        │  Scalar  │   AVX2   │   NEON   │             │
-│        └──────────┴──────────┴──────────┘             │
-├─────────────────────────────────────────────────────────┤
-│                  Memory Management                      │
-│     KV-Cache │ Tensor Pool │ Memory-mapped I/O        │
-├─────────────────────────────────────────────────────────┤
-│                  GGUF Loader                           │
-│        header │ metadata │ tensors │ quantization     │
-└─────────────────────────────────────────────────────────┘
+// Load GGUF model file
+let loader = GgufLoader::open("model.gguf")?;
+
+// Inspect model metadata
+println!("Architecture: {}", loader.metadata().get_str("general.architecture").unwrap());
+println!("Tensors: {}", loader.tensors().len());
+
+// Extract and dequantize tensors
+let extractor = TensorExtractor::new(&loader);
+let weights = extractor.extract("model.layers.0.attn.wq.weight")?;
+println!("Shape: {:?}", weights.dims());
 ```
 
 ## Project Structure
 
 ```
 src/
-├── lib.rs              # Library entry point
-├── bin/
-│   └── main.rs         # CLI binary
-├── tensor/             # N-dimensional array abstraction
-├── gguf/               # GGUF format parser
-├── ops/                # Core operations (matmul, attention, etc.)
-├── model/              # Model architectures
-├── cache/              # KV-cache management
-├── quant/              # Quantization (INT8/INT4)
-└── simd/               # SIMD kernels
+├── tensor/          # N-dimensional tensor implementation
+│   ├── shape.rs     # Shape and stride abstractions
+│   ├── view.rs      # Non-owning tensor views
+│   └── ops.rs       # Tensor operations
+└── gguf/            # GGUF file format support
+    ├── loader.rs    # File loading and memory mapping
+    ├── metadata.rs  # Key-value metadata parsing
+    ├── extract.rs   # Tensor extraction API
+    ├── dequant.rs   # Quantization/dequantization
+    └── cache.rs     # Tensor caching layer
 ```
 
-## Performance Targets
+## Roadmap
 
-| Model | Quantization | Target Speed | Memory |
-|-------|--------------|--------------|--------|
-| TinyLlama 1.1B | FP32 | 20+ tok/s | ~5 GB |
-| Llama 7B | INT8 | 10+ tok/s | ~8 GB |
-| Llama 7B | INT4 | 15+ tok/s | ~4 GB |
-
-*Targets for modern consumer CPU (e.g., Ryzen 7, Apple M1)*
+- [x] Core tensor system
+- [x] GGUF parser with memory-mapped I/O
+- [x] F32/F16/Q8_0/Q4_0 dequantization
+- [x] Tensor caching and preloading
+- [ ] Tokenizer (BPE)
+- [ ] Embedding and position encoding
+- [ ] Attention mechanism
+- [ ] Transformer blocks
+- [ ] Text generation pipeline
 
 ## Building
 
-### Requirements
-
-- Rust 1.75+ (stable)
-- ~16 GB RAM for development with 7B models
-
-### Build Commands
-
 ```bash
-# Debug build
-cargo build
-
-# Release build (optimized)
 cargo build --release
-
-# Run tests
 cargo test
-
-# Run benchmarks
-cargo bench
-
-# Generate documentation
-cargo doc --open
 ```
-
-## Resources
-
-### Reference Implementations
-- [llama2.c](https://github.com/karpathy/llama2.c) - Minimal C implementation
-- [llama.cpp](https://github.com/ggerganov/llama.cpp) - Production C++ implementation
-- [GGUF Specification](https://github.com/ggerganov/ggml/blob/master/docs/gguf.md)
-
-### Papers
-- [Attention Is All You Need](https://arxiv.org/abs/1706.03762) - Transformer architecture
-- [LLaMA](https://arxiv.org/abs/2302.13971) - LLaMA architecture details
-- [RoFormer](https://arxiv.org/abs/2104.09864) - Rotary Position Embedding
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+MIT
