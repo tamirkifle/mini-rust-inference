@@ -371,13 +371,13 @@ impl<'a> TensorExtractor<'a> {
     }
 
     // =========================================================================
-    // Generic Extraction (auto-detect type)
+    // Q8_0 Tensor Extraction (Dequantization)
     // =========================================================================
 
-    /// Extracts a tensor by name, automatically handling F32 and F16 types.
+    /// Extracts a Q8_0 tensor by name, dequantizing to F32.
     ///
-    /// This method detects the tensor's storage type and performs the
-    /// appropriate extraction (direct copy for F32, conversion for F16).
+    /// Q8_0 is an 8-bit quantization format with a shared scale per block
+    /// of 32 elements. This method dequantizes the data to full precision.
     ///
     /// # Arguments
     ///
@@ -387,7 +387,164 @@ impl<'a> TensorExtractor<'a> {
     ///
     /// Returns an error if:
     /// - The tensor doesn't exist
-    /// - The tensor type is not supported (quantized types not yet implemented)
+    /// - The tensor is not Q8_0 type
+    /// - Data extraction or dequantization fails
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use llm_engine::gguf::{GgufLoader, TensorExtractor};
+    ///
+    /// let loader = GgufLoader::open("model.gguf")?;
+    /// let extractor = TensorExtractor::new(&loader);
+    ///
+    /// // Extract Q8_0 tensor and dequantize to F32
+    /// let tensor = extractor.extract_q8_0("model.layers.0.attn.weight")?;
+    /// println!("Shape: {:?}", tensor.dims());
+    /// # Ok::<(), llm_engine::gguf::GgufError>(())
+    /// ```
+    pub fn extract_q8_0(&self, name: &str) -> Result<Tensor<f32>> {
+        let info = self
+            .loader
+            .tensors()
+            .get(name)
+            .ok_or_else(|| GgufError::KeyNotFound {
+                key: name.to_string(),
+            })?;
+
+        // Verify type is Q8_0
+        if info.dtype() != GgmlType::Q8_0 {
+            return Err(GgufError::TypeMismatch {
+                expected: "Q8_0".to_string(),
+                got: info.dtype().name().to_string(),
+            });
+        }
+
+        self.extract_q8_0_from_info(info)
+    }
+
+    /// Extracts a Q8_0 tensor from tensor info, dequantizing to F32.
+    ///
+    /// This is useful when you already have a `TensorInfo` reference
+    /// and want to avoid a name lookup.
+    ///
+    /// # Arguments
+    ///
+    /// * `info` - Reference to the tensor's metadata
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The tensor is not Q8_0 type
+    /// - Data extraction or dequantization fails
+    pub fn extract_q8_0_from_info(&self, info: &TensorInfo) -> Result<Tensor<f32>> {
+        use super::dequant::{dequantize_q8_0, Q8_0_BLOCK_ELEMENTS, Q8_0_BLOCK_SIZE};
+
+        // Verify type is Q8_0
+        if info.dtype() != GgmlType::Q8_0 {
+            return Err(GgufError::TypeMismatch {
+                expected: "Q8_0".to_string(),
+                got: info.dtype().name().to_string(),
+            });
+        }
+
+        // Get raw tensor data
+        let raw_data = self
+            .loader
+            .tensor_data_for(info)
+            .ok_or_else(|| GgufError::TensorDataUnavailable {
+                name: info.name().to_string(),
+            })?;
+
+        // Calculate expected size
+        let numel = info.numel() as usize;
+
+        // Q8_0: must be a multiple of 32 elements
+        if numel % Q8_0_BLOCK_ELEMENTS != 0 {
+            return Err(GgufError::ShapeMismatch {
+                expected: numel - (numel % Q8_0_BLOCK_ELEMENTS) + Q8_0_BLOCK_ELEMENTS,
+                got: numel,
+            });
+        }
+
+        let num_blocks = numel / Q8_0_BLOCK_ELEMENTS;
+        let expected_bytes = num_blocks * Q8_0_BLOCK_SIZE;
+
+        if raw_data.len() != expected_bytes {
+            return Err(GgufError::ShapeMismatch {
+                expected: expected_bytes,
+                got: raw_data.len(),
+            });
+        }
+
+        // Dequantize Q8_0 to F32
+        let data = dequantize_q8_0(raw_data.as_bytes())?;
+
+        // Create tensor with row-major shape
+        let shape = info.shape_row_major();
+
+        Tensor::from_vec(data, shape).map_err(|e| GgufError::ShapeMismatch {
+            expected: numel,
+            got: e.to_string().parse().unwrap_or(0),
+        })
+    }
+
+    /// Checks if a tensor can be extracted as Q8_0.
+    ///
+    /// Returns `true` if the tensor exists and is stored as Q8_0 type.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The tensor name to check
+    #[must_use]
+    pub fn can_extract_q8_0(&self, name: &str) -> bool {
+        self.loader
+            .tensors()
+            .get(name)
+            .map(|info| info.dtype() == GgmlType::Q8_0)
+            .unwrap_or(false)
+    }
+
+    /// Lists all Q8_0 tensors in the file.
+    ///
+    /// Returns an iterator over tensor names that are stored as Q8_0 type.
+    pub fn q8_0_tensor_names(&self) -> impl Iterator<Item = &str> {
+        self.loader
+            .tensors()
+            .iter()
+            .filter(|info| info.dtype() == GgmlType::Q8_0)
+            .map(TensorInfo::name)
+    }
+
+    /// Returns the number of Q8_0 tensors in the file.
+    #[must_use]
+    pub fn q8_0_tensor_count(&self) -> usize {
+        self.loader
+            .tensors()
+            .iter()
+            .filter(|info| info.dtype() == GgmlType::Q8_0)
+            .count()
+    }
+
+    // =========================================================================
+    // Generic Extraction (auto-detect type)
+    // =========================================================================
+
+    /// Extracts a tensor by name, automatically handling F32, F16, and Q8_0 types.
+    ///
+    /// This method detects the tensor's storage type and performs the
+    /// appropriate extraction (direct copy for F32, conversion for F16,
+    /// dequantization for Q8_0).
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The tensor name in the GGUF file
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The tensor doesn't exist
+    /// - The tensor type is not supported
     /// - Data extraction fails
     ///
     /// # Example
@@ -398,7 +555,7 @@ impl<'a> TensorExtractor<'a> {
     /// let loader = GgufLoader::open("model.gguf")?;
     /// let extractor = TensorExtractor::new(&loader);
     ///
-    /// // Automatically handles F32 or F16 tensors
+    /// // Automatically handles F32, F16, or Q8_0 tensors
     /// let tensor = extractor.extract("model.embed_tokens.weight")?;
     /// # Ok::<(), llm_engine::gguf::GgufError>(())
     /// ```
@@ -414,8 +571,9 @@ impl<'a> TensorExtractor<'a> {
         match info.dtype() {
             GgmlType::F32 => self.extract_f32_from_info(info),
             GgmlType::F16 => self.extract_f16_from_info(info),
+            GgmlType::Q8_0 => self.extract_q8_0_from_info(info),
             other => Err(GgufError::TypeMismatch {
-                expected: "F32 or F16".to_string(),
+                expected: "F32, F16, or Q8_0".to_string(),
                 got: other.name().to_string(),
             }),
         }
@@ -590,6 +748,8 @@ pub struct ExtractionInfo {
     pub supports_f32_direct: bool,
     /// Whether F16 extraction (with conversion to F32) is supported.
     pub supports_f16_extraction: bool,
+    /// Whether Q8_0 dequantization is supported.
+    pub supports_q8_0_dequant: bool,
     /// Whether the tensor is quantized.
     pub is_quantized: bool,
 }
@@ -606,14 +766,15 @@ impl ExtractionInfo {
             numel: info.numel() as usize,
             supports_f32_direct: info.dtype() == GgmlType::F32,
             supports_f16_extraction: info.dtype() == GgmlType::F16,
+            supports_q8_0_dequant: info.dtype() == GgmlType::Q8_0,
             is_quantized: info.is_quantized(),
         }
     }
 
-    /// Returns true if the tensor can be extracted to F32 (either directly or via conversion).
+    /// Returns true if the tensor can be extracted to F32 (directly, via conversion, or dequantization).
     #[must_use]
     pub fn can_extract_to_f32(&self) -> bool {
-        self.supports_f32_direct || self.supports_f16_extraction
+        self.supports_f32_direct || self.supports_f16_extraction || self.supports_q8_0_dequant
     }
 }
 
@@ -718,12 +879,14 @@ mod tests {
             numel: 32,
             supports_f32_direct: true,
             supports_f16_extraction: false,
+            supports_q8_0_dequant: false,
             is_quantized: false,
         };
 
         assert_eq!(info.name, "test.weight");
         assert!(info.supports_f32_direct);
         assert!(!info.supports_f16_extraction);
+        assert!(!info.supports_q8_0_dequant);
         assert!(!info.is_quantized);
         assert!(info.can_extract_to_f32());
     }
@@ -738,13 +901,15 @@ mod tests {
             numel: 65536,
             supports_f32_direct: false,
             supports_f16_extraction: false,
+            supports_q8_0_dequant: false,
             is_quantized: true,
         };
 
         assert!(!info.supports_f32_direct);
         assert!(!info.supports_f16_extraction);
+        assert!(!info.supports_q8_0_dequant);
         assert!(info.is_quantized);
-        assert!(!info.can_extract_to_f32()); // Quantized not yet supported
+        assert!(!info.can_extract_to_f32()); // Q4_0 not yet supported
     }
 
     #[test]
@@ -881,13 +1046,37 @@ mod tests {
             numel: 32,
             supports_f32_direct: false,
             supports_f16_extraction: true,
+            supports_q8_0_dequant: false,
             is_quantized: false,
         };
 
         assert_eq!(info.name, "test.f16_weight");
         assert!(!info.supports_f32_direct); // F16 needs conversion
         assert!(info.supports_f16_extraction);
+        assert!(!info.supports_q8_0_dequant);
         assert!(!info.is_quantized); // F16 is not quantized, just half-precision
         assert!(info.can_extract_to_f32()); // Can extract via conversion
+    }
+
+    #[test]
+    fn test_extraction_info_q8_0() {
+        let info = ExtractionInfo {
+            name: "test.q8_0_weight".to_string(),
+            dtype: GgmlType::Q8_0,
+            shape: vec![256, 256],
+            size_bytes: 65536 / 32 * 34, // 34 bytes per 32 elements
+            numel: 65536,
+            supports_f32_direct: false,
+            supports_f16_extraction: false,
+            supports_q8_0_dequant: true,
+            is_quantized: true,
+        };
+
+        assert_eq!(info.name, "test.q8_0_weight");
+        assert!(!info.supports_f32_direct);
+        assert!(!info.supports_f16_extraction);
+        assert!(info.supports_q8_0_dequant);
+        assert!(info.is_quantized);
+        assert!(info.can_extract_to_f32()); // Can extract via dequantization
     }
 }

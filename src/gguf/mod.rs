@@ -54,6 +54,7 @@
 //! - [llama.cpp](https://github.com/ggerganov/llama.cpp)
 
 mod dtype;
+pub mod dequant;
 mod error;
 mod extract;
 pub mod f16;
