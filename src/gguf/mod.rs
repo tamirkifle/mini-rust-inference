@@ -53,6 +53,7 @@
 //! - [GGUF Specification](https://github.com/ggerganov/ggml/blob/master/docs/gguf.md)
 //! - [llama.cpp](https://github.com/ggerganov/llama.cpp)
 
+pub mod cache;
 mod dtype;
 pub mod dequant;
 mod error;
