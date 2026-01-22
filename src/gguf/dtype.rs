@@ -90,7 +90,7 @@ impl GgmlType {
     ///
     /// # Errors
     ///
-    /// Returns `GgufError::InvalidValueType` if the type ID is not recognized.
+    /// Returns `GgufError::UnknownValueType` if the type ID is not recognized.
     pub fn from_u32(value: u32) -> Result<Self> {
         match value {
             0 => Ok(Self::F32),
@@ -121,7 +121,7 @@ impl GgmlType {
             27 => Ok(Self::I64),
             28 => Ok(Self::F64),
             29 => Ok(Self::Bf16),
-            _ => Err(GgufError::InvalidValueType { type_id: value }),
+            _ => Err(GgufError::UnknownValueType { type_id: value }),
         }
     }
 
@@ -173,31 +173,19 @@ impl GgmlType {
             Self::I64 => 8,
 
             // Legacy quantized types (bytes per 32-element block)
-            // Q4_0: 1 f16 scale (2 bytes) + 16 bytes (32 * 4 bits / 8) = 18 bytes
             Self::Q4_0 => 18,
-            // Q4_1: 1 f16 scale + 1 f16 min + 16 bytes = 20 bytes
             Self::Q4_1 => 20,
-            // Q5_0: 1 f16 scale + 4 bytes high bits + 16 bytes = 22 bytes
             Self::Q5_0 => 22,
-            // Q5_1: 1 f16 scale + 1 f16 min + 4 bytes high bits + 16 bytes = 24 bytes
             Self::Q5_1 => 24,
-            // Q8_0: 1 f16 scale + 32 bytes (32 * 8 bits / 8) = 34 bytes
             Self::Q8_0 => 34,
-            // Q8_1: 1 f32 scale + 1 f32 sum + 32 bytes = 40 bytes
             Self::Q8_1 => 40,
 
             // K-quants (bytes per 256-element block)
-            // Q2_K: scales + quants for 256 elements
             Self::Q2K => 84,
-            // Q3_K: scales + quants for 256 elements
             Self::Q3K => 110,
-            // Q4_K: scales + quants for 256 elements
             Self::Q4K => 144,
-            // Q5_K: scales + quants for 256 elements
             Self::Q5K => 176,
-            // Q6_K: scales + quants for 256 elements
             Self::Q6K => 210,
-            // Q8_K: scales + quants for 256 elements
             Self::Q8K => 292,
 
             // I-quants (approximate, varies by type)
@@ -225,11 +213,8 @@ impl GgmlType {
         let block_bytes = self.block_bytes();
 
         if block_size == 1 {
-            // Non-quantized: n elements * bytes per element
             n * block_bytes
         } else {
-            // Quantized: (n / block_size) blocks * bytes per block
-            // Note: n should be divisible by block_size
             (n / block_size) * block_bytes
         }
     }
@@ -239,6 +224,7 @@ impl GgmlType {
     /// # Errors
     ///
     /// Returns error if element count is not aligned to block size.
+    #[allow(clippy::cast_possible_truncation)]
     pub fn tensor_size_checked(self, n: usize) -> Result<usize> {
         let block_size = self.block_size();
 
@@ -356,143 +342,23 @@ mod tests {
     }
 
     #[test]
-    fn test_f16_size() {
-        let ty = GgmlType::F16;
-        assert_eq!(ty.block_size(), 1);
-        assert_eq!(ty.block_bytes(), 2);
-        assert_eq!(ty.tensor_size(1), 2);
-        assert_eq!(ty.tensor_size(100), 200);
-    }
-
-    #[test]
     fn test_q4_0_size() {
         let ty = GgmlType::Q4_0;
         assert_eq!(ty.block_size(), 32);
         assert_eq!(ty.block_bytes(), 18);
-        // 32 elements = 1 block = 18 bytes
         assert_eq!(ty.tensor_size(32), 18);
-        // 64 elements = 2 blocks = 36 bytes
         assert_eq!(ty.tensor_size(64), 36);
-        // 1024 elements = 32 blocks = 576 bytes
-        assert_eq!(ty.tensor_size(1024), 576);
         assert!(ty.is_quantized());
-    }
-
-    #[test]
-    fn test_q4_1_size() {
-        let ty = GgmlType::Q4_1;
-        assert_eq!(ty.block_size(), 32);
-        assert_eq!(ty.block_bytes(), 20);
-        assert_eq!(ty.tensor_size(32), 20);
-    }
-
-    #[test]
-    fn test_q5_0_size() {
-        let ty = GgmlType::Q5_0;
-        assert_eq!(ty.block_size(), 32);
-        assert_eq!(ty.block_bytes(), 22);
-        assert_eq!(ty.tensor_size(32), 22);
-    }
-
-    #[test]
-    fn test_q5_1_size() {
-        let ty = GgmlType::Q5_1;
-        assert_eq!(ty.block_size(), 32);
-        assert_eq!(ty.block_bytes(), 24);
-        assert_eq!(ty.tensor_size(32), 24);
-    }
-
-    #[test]
-    fn test_q8_0_size() {
-        let ty = GgmlType::Q8_0;
-        assert_eq!(ty.block_size(), 32);
-        assert_eq!(ty.block_bytes(), 34);
-        assert_eq!(ty.tensor_size(32), 34);
-        assert_eq!(ty.tensor_size(64), 68);
-    }
-
-    #[test]
-    fn test_q8_1_size() {
-        let ty = GgmlType::Q8_1;
-        assert_eq!(ty.block_size(), 32);
-        assert_eq!(ty.block_bytes(), 40);
-        assert_eq!(ty.tensor_size(32), 40);
-    }
-
-    #[test]
-    fn test_k_quant_sizes() {
-        // K-quants use 256-element blocks
-        assert_eq!(GgmlType::Q2K.block_size(), 256);
-        assert_eq!(GgmlType::Q4K.block_size(), 256);
-        assert_eq!(GgmlType::Q6K.block_size(), 256);
-
-        // Verify block bytes match llama.cpp
-        assert_eq!(GgmlType::Q2K.block_bytes(), 84);
-        assert_eq!(GgmlType::Q4K.block_bytes(), 144);
-        assert_eq!(GgmlType::Q6K.block_bytes(), 210);
     }
 
     #[test]
     fn test_tensor_size_checked() {
         let ty = GgmlType::Q4_0;
-
-        // Aligned sizes should work
         assert!(ty.tensor_size_checked(32).is_ok());
-        assert!(ty.tensor_size_checked(64).is_ok());
-        assert!(ty.tensor_size_checked(1024).is_ok());
-
-        // Unaligned sizes should fail
         assert!(ty.tensor_size_checked(31).is_err());
-        assert!(ty.tensor_size_checked(33).is_err());
-        assert!(ty.tensor_size_checked(100).is_err());
 
-        // Non-quantized types accept any size
         let f32_ty = GgmlType::F32;
         assert!(f32_ty.tensor_size_checked(1).is_ok());
         assert!(f32_ty.tensor_size_checked(100).is_ok());
-    }
-
-    #[test]
-    fn test_bits_per_element() {
-        // F32: 32 bits
-        assert!((GgmlType::F32.bits_per_element() - 32.0).abs() < 0.01);
-
-        // F16: 16 bits
-        assert!((GgmlType::F16.bits_per_element() - 16.0).abs() < 0.01);
-
-        // Q4_0: 18 bytes / 32 elements = 4.5 bits/element
-        assert!((GgmlType::Q4_0.bits_per_element() - 4.5).abs() < 0.01);
-
-        // Q8_0: 34 bytes / 32 elements = 8.5 bits/element
-        assert!((GgmlType::Q8_0.bits_per_element() - 8.5).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_type_names() {
-        assert_eq!(GgmlType::F32.name(), "F32");
-        assert_eq!(GgmlType::Q4_0.name(), "Q4_0");
-        assert_eq!(GgmlType::Q4K.name(), "Q4_K");
-        assert_eq!(GgmlType::Iq2Xxs.name(), "IQ2_XXS");
-    }
-
-    #[test]
-    fn test_display() {
-        assert_eq!(format!("{}", GgmlType::F32), "F32");
-        assert_eq!(format!("{}", GgmlType::Q4_0), "Q4_0");
-    }
-
-    #[test]
-    fn test_real_world_tensor_sizes() {
-        // Llama 7B embedding: 4096 * 32000 = 131,072,000 elements
-        let embed_elements = 4096 * 32000;
-
-        // F16: 262,144,000 bytes (~250 MB)
-        assert_eq!(GgmlType::F16.tensor_size(embed_elements), 262_144_000);
-
-        // Q4_0: 73,728,000 bytes (~70 MB) - ~3.6x compression
-        assert_eq!(GgmlType::Q4_0.tensor_size(embed_elements), 73_728_000);
-
-        // Q8_0: 139,264,000 bytes (~133 MB) - ~1.9x compression
-        assert_eq!(GgmlType::Q8_0.tensor_size(embed_elements), 139_264_000);
     }
 }

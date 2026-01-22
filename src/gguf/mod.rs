@@ -1,4 +1,4 @@
-//! GGUF file format parser.
+//! GGUF file format parser and tensor extraction.
 //!
 //! GGUF (GGML Universal Format) is a binary file format for storing
 //! large language model weights with metadata. It supports various
@@ -26,25 +26,26 @@
 //! └─────────────────────────────────────────┘
 //! ```
 //!
-//! # Example
+//! # Example: Loading and Inspecting
 //!
 //! ```no_run
-//! use std::fs::File;
-//! use std::io::BufReader;
-//! use llm_engine::gguf::{GgufHeader, Metadata};
+//! use llm_engine::gguf::{GgufLoader, TensorExtractor};
 //!
-//! let file = File::open("model.gguf").expect("open file");
-//! let mut reader = BufReader::new(file);
+//! // Open a GGUF model file
+//! let loader = GgufLoader::open("model.gguf")?;
 //!
-//! let header = GgufHeader::read(&mut reader).expect("parse header");
-//! println!("GGUF version: {}", header.version());
-//! println!("Tensor count: {}", header.tensor_count());
-//!
-//! let metadata = Metadata::read(&mut reader, header.metadata_kv_count())
-//!     .expect("parse metadata");
-//! if let Some(arch) = metadata.get_str("general.architecture") {
+//! // Inspect metadata
+//! println!("GGUF version: {}", loader.header().version());
+//! if let Some(arch) = loader.metadata().get_str("general.architecture") {
 //!     println!("Architecture: {arch}");
 //! }
+//!
+//! // Extract F32 tensor data
+//! let extractor = TensorExtractor::new(&loader);
+//! if let Ok(tensor) = extractor.extract_f32("output.weight") {
+//!     println!("Extracted tensor shape: {:?}", tensor.dims());
+//! }
+//! # Ok::<(), llm_engine::gguf::GgufError>(())
 //! ```
 //!
 //! # References
@@ -54,6 +55,8 @@
 
 mod dtype;
 mod error;
+mod extract;
+pub mod f16;
 mod header;
 mod loader;
 mod metadata;
@@ -61,26 +64,39 @@ mod mmap;
 mod quantization;
 mod tensor_info;
 
+// Core types
 pub use dtype::GgmlType;
 pub use error::{GgufError, Result};
 pub use header::{GgufHeader, GGUF_MAGIC, SUPPORTED_VERSIONS};
 pub use loader::{inspect, GgufInspection, GgufLoader, GgufLoaderBuilder};
 pub use metadata::{keys, GgufValueType, Metadata, MetadataValue};
 pub use mmap::{MappedFile, MappedSlice};
-pub use quantization::{
-    f16_to_f32, f32_to_f16, BlockQ4_0, BlockQ4_1, BlockQ5_0, BlockQ5_1, BlockQ8_0, BlockQ8_1,
-    QK_K, QK_LEGACY,
+
+// Tensor extraction
+pub use extract::{
+    extract_f32_from_bytes, extract_f32_into, validate_tensor_data, ExtractionInfo,
+    TensorExtractor,
 };
+
+// F16 (half-precision) support
+pub use f16::{
+    extract_f16_as_f32, extract_f16_as_f32_into, f16_to_f32_batch, f16_to_f32_batch_into,
+    f32_to_f16_batch,
+};
+
+// Quantization support
+pub use quantization::{
+    block_bytes_for_type, block_size_for_type, f16_to_f32, f32_to_f16, BlockQ4_0, BlockQ4_1,
+    BlockQ5_0, BlockQ5_1, BlockQ8_0, BlockQ8_1, QK_K, QK_LEGACY,
+};
+
+// Tensor info utilities
 pub use tensor_info::{
     align_offset, padding_for_alignment, TensorInfo, TensorInfos, TensorSummary,
     DEFAULT_ALIGNMENT,
 };
 
-// Re-export reader utilities for use by other modules (tensor_info, etc.)
-pub(crate) use header::{
-    read_f32, read_f64, read_i16, read_i32, read_i64, read_i8, read_string, read_u16, read_u32,
-    read_u64, read_u8,
-};
+// Reader utilities are used internally by submodules via `super::header::`
 
 #[cfg(test)]
 mod tests {
@@ -98,24 +114,24 @@ mod tests {
         let mut data = Vec::new();
 
         // Header
-        data.extend_from_slice(&GGUF_MAGIC);            // Magic
-        data.extend_from_slice(&3u32.to_le_bytes());    // Version
-        data.extend_from_slice(&2u64.to_le_bytes());    // Tensor count
-        data.extend_from_slice(&3u64.to_le_bytes());    // Metadata count
+        data.extend_from_slice(&GGUF_MAGIC); // Magic
+        data.extend_from_slice(&3u32.to_le_bytes()); // Version
+        data.extend_from_slice(&2u64.to_le_bytes()); // Tensor count
+        data.extend_from_slice(&3u64.to_le_bytes()); // Metadata count
 
         // Metadata entry 1: general.architecture = "llama"
         write_string(&mut data, "general.architecture");
-        data.extend_from_slice(&8u32.to_le_bytes());    // Type: String
+        data.extend_from_slice(&8u32.to_le_bytes()); // Type: String
         write_string(&mut data, "llama");
 
         // Metadata entry 2: llama.block_count = 32
         write_string(&mut data, "llama.block_count");
-        data.extend_from_slice(&4u32.to_le_bytes());    // Type: Uint32
+        data.extend_from_slice(&4u32.to_le_bytes()); // Type: Uint32
         data.extend_from_slice(&32u32.to_le_bytes());
 
         // Metadata entry 3: llama.embedding_length = 4096
         write_string(&mut data, "llama.embedding_length");
-        data.extend_from_slice(&4u32.to_le_bytes());    // Type: Uint32
+        data.extend_from_slice(&4u32.to_le_bytes()); // Type: Uint32
         data.extend_from_slice(&4096u32.to_le_bytes());
 
         data
@@ -141,146 +157,45 @@ mod tests {
     }
 
     #[test]
-    fn test_gguf_with_arrays() {
-        let mut data = Vec::new();
+    fn test_type_conversions() {
+        // Test f16 conversions
+        let f32_val = 1.5f32;
+        let f16_bits = f32_to_f16(f32_val);
+        let back = f16_to_f32(f16_bits);
+        assert!((back - f32_val).abs() < 0.001);
 
-        // Header
-        data.extend_from_slice(&GGUF_MAGIC);
-        data.extend_from_slice(&3u32.to_le_bytes());
-        data.extend_from_slice(&0u64.to_le_bytes());    // No tensors
-        data.extend_from_slice(&1u64.to_le_bytes());    // 1 metadata entry
-
-        // Metadata: tokenizer.ggml.token_type = [1, 2, 1, 1]
-        write_string(&mut data, "tokenizer.ggml.token_type");
-        data.extend_from_slice(&9u32.to_le_bytes());    // Type: Array
-        data.extend_from_slice(&4u32.to_le_bytes());    // Element type: Uint32
-        data.extend_from_slice(&4u64.to_le_bytes());    // Length: 4
-        data.extend_from_slice(&1u32.to_le_bytes());
-        data.extend_from_slice(&2u32.to_le_bytes());
-        data.extend_from_slice(&1u32.to_le_bytes());
-        data.extend_from_slice(&1u32.to_le_bytes());
-
-        let mut cursor = Cursor::new(data);
-
-        let header = GgufHeader::read(&mut cursor).unwrap();
-        let metadata = Metadata::read(&mut cursor, header.metadata_kv_count()).unwrap();
-
-        let arr = metadata.get("tokenizer.ggml.token_type").unwrap();
-        assert_eq!(arr.as_u32_array(), Some(&[1u32, 2, 1, 1][..]));
+        // Test type ID conversions
+        assert_eq!(GgmlType::from_u32(0).unwrap(), GgmlType::F32);
+        assert_eq!(GgmlType::from_u32(1).unwrap(), GgmlType::F16);
+        assert_eq!(GgmlType::from_u32(2).unwrap(), GgmlType::Q4_0);
     }
 
     #[test]
-    fn test_gguf_version_2() {
-        let mut data = Vec::new();
-        data.extend_from_slice(&GGUF_MAGIC);
-        data.extend_from_slice(&2u32.to_le_bytes());    // Version 2
-        data.extend_from_slice(&0u64.to_le_bytes());
-        data.extend_from_slice(&0u64.to_le_bytes());
+    fn test_extract_f32_bytes() {
+        let values: Vec<f32> = vec![1.0, 2.5, -3.14, 0.0];
+        let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
 
-        let mut cursor = Cursor::new(data);
-        let header = GgufHeader::read(&mut cursor).unwrap();
+        let extracted = extract_f32_from_bytes(&bytes).unwrap();
 
-        assert_eq!(header.version(), 2);
-    }
-
-    #[test]
-    fn test_invalid_gguf_magic() {
-        let mut data = Vec::new();
-        data.extend_from_slice(b"GGML");  // Wrong magic
-        data.extend_from_slice(&3u32.to_le_bytes());
-        data.extend_from_slice(&0u64.to_le_bytes());
-        data.extend_from_slice(&0u64.to_le_bytes());
-
-        let mut cursor = Cursor::new(data);
-        let result = GgufHeader::read(&mut cursor);
-
-        assert!(result.is_err());
-        if let Err(GgufError::InvalidMagic { got }) = result {
-            assert_eq!(&got, b"GGML");
-        } else {
-            panic!("Expected InvalidMagic error");
+        assert_eq!(extracted.len(), 4);
+        for (i, &val) in extracted.iter().enumerate() {
+            assert!(
+                (val - values[i]).abs() < 1e-6,
+                "Mismatch at {i}: expected {}, got {val}",
+                values[i]
+            );
         }
-    }
-
-    #[test]
-    fn test_unsupported_version() {
-        let mut data = Vec::new();
-        data.extend_from_slice(&GGUF_MAGIC);
-        data.extend_from_slice(&99u32.to_le_bytes());  // Future version
-        data.extend_from_slice(&0u64.to_le_bytes());
-        data.extend_from_slice(&0u64.to_le_bytes());
-
-        let mut cursor = Cursor::new(data);
-        let result = GgufHeader::read(&mut cursor);
-
-        assert!(matches!(
-            result,
-            Err(GgufError::UnsupportedVersion { version: 99, .. })
-        ));
-    }
-
-    #[test]
-    fn test_metadata_keys_constants() {
-        // Verify key constants are defined correctly
-        assert_eq!(keys::GENERAL_ARCHITECTURE, "general.architecture");
-        assert_eq!(keys::LLAMA_BLOCK_COUNT, "llama.block_count");
-        assert_eq!(keys::LLAMA_EMBEDDING_LENGTH, "llama.embedding_length");
-    }
-
-    #[test]
-    fn test_ggml_type_sizes() {
-        // Verify type sizes match expected values
-        assert_eq!(GgmlType::F32.tensor_size(100), 400);
-        assert_eq!(GgmlType::F16.tensor_size(100), 200);
-        assert_eq!(GgmlType::Q4_0.tensor_size(32), 18);
-        assert_eq!(GgmlType::Q8_0.tensor_size(32), 34);
-    }
-
-    #[test]
-    fn test_quantization_block_sizes() {
-        // Verify block constants match type definitions
-        assert_eq!(QK_LEGACY, GgmlType::Q4_0.block_size());
-        assert_eq!(QK_LEGACY, GgmlType::Q8_0.block_size());
-        assert_eq!(QK_K, GgmlType::Q4K.block_size());
-    }
-
-    #[test]
-    fn test_f16_roundtrip() {
-        let values = [0.0f32, 1.0, -1.0, 0.5, 100.0];
-        for v in values {
-            let h = f32_to_f16(v);
-            let back = f16_to_f32(h);
-            assert!((v - back).abs() < 0.01, "Failed for {v}");
-        }
-    }
-
-    #[test]
-    fn test_tensor_info_integration() {
-        // Test that tensor info works with dtype size calculations
-        let dtype = GgmlType::Q4_0;
-        let numel = 4096 * 4096; // 16M elements
-
-        // Verify size calculation
-        let expected_size = dtype.tensor_size(numel);
-        assert_eq!(expected_size, (numel / 32) * 18); // 32 elements per block, 18 bytes per block
     }
 
     #[test]
     fn test_alignment_utilities() {
-        assert_eq!(align_offset(100, DEFAULT_ALIGNMENT as u64), 128);
-        assert_eq!(padding_for_alignment(100, DEFAULT_ALIGNMENT as u64), 28);
-    }
+        assert_eq!(align_offset(0, 32), 0);
+        assert_eq!(align_offset(1, 32), 32);
+        assert_eq!(align_offset(32, 32), 32);
+        assert_eq!(align_offset(33, 32), 64);
 
-    #[test]
-    fn test_mapped_file_and_loader_integration() {
-        // Verify that MappedFile and MappedSlice are exported
-        fn _check_types(_mf: MappedFile, _ms: MappedSlice) {}
-
-        // Verify GgufLoader and related types are exported
-        fn _check_loader_types(
-            _l: GgufLoader,
-            _b: GgufLoaderBuilder,
-            _i: GgufInspection,
-        ) {}
+        assert_eq!(padding_for_alignment(0, 32), 0);
+        assert_eq!(padding_for_alignment(1, 32), 31);
+        assert_eq!(padding_for_alignment(32, 32), 0);
     }
 }

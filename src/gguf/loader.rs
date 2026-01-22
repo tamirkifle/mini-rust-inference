@@ -45,7 +45,7 @@ use super::metadata::Metadata;
 use super::mmap::{MappedFile, MappedSlice};
 use super::tensor_info::{align_offset, TensorInfo, TensorInfos, TensorSummary, DEFAULT_ALIGNMENT};
 
-use std::io::{BufReader, Cursor, Read, Seek, SeekFrom};
+use std::io::Cursor;
 use std::path::Path;
 
 /// A loaded GGUF file with memory-mapped tensor data.
@@ -98,7 +98,9 @@ impl GgufLoader {
     /// # Ok::<(), llm_engine::gguf::GgufError>(())
     /// ```
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let mmap = MappedFile::open(&path).map_err(GgufError::Io)?;
+        let mmap = MappedFile::open(&path).map_err(|e| GgufError::Io {
+            message: e.to_string(),
+        })?;
 
         // Parse from memory-mapped data
         Self::from_mapped(mmap)
@@ -389,9 +391,8 @@ impl GgufLoaderBuilder {
             let actual = loader.metadata().get_str("general.architecture");
             if actual != Some(expected.as_str()) {
                 return Err(GgufError::TypeMismatch {
-                    key: "general.architecture".to_string(),
-                    expected: expected.as_str(),
-                    got: actual.unwrap_or("(none)"),
+                    expected: expected.clone(),
+                    got: actual.unwrap_or("(none)").to_string(),
                 });
             }
         }
