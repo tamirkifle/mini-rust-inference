@@ -427,6 +427,341 @@ pub fn create_q8_0_block(values: &[f32]) -> [u8; Q8_0_BLOCK_SIZE] {
     block
 }
 
+// =============================================================================
+// Q4_0 Dequantization
+// =============================================================================
+
+/// Size of a Q4_0 block in bytes (2 bytes scale + 16 bytes quants).
+pub const Q4_0_BLOCK_SIZE: usize = 18;
+
+/// Number of elements per Q4_0 block.
+pub const Q4_0_BLOCK_ELEMENTS: usize = QK_LEGACY; // 32
+
+/// Dequantizes Q4_0 data to F32 values.
+///
+/// Q4_0 stores 32 values per block with a shared F16 scale factor.
+/// Each byte contains two 4-bit quantized values (low nibble first).
+/// Values are unsigned (0-15) and shifted by -8 to get signed range (-8 to +7).
+///
+/// # Arguments
+///
+/// * `data` - Raw byte slice containing Q4_0 blocks
+///
+/// # Returns
+///
+/// A vector of f32 values.
+///
+/// # Errors
+///
+/// Returns an error if the data length is not a multiple of the Q4_0 block size (18 bytes).
+///
+/// # Example
+///
+/// ```
+/// use llm_engine::gguf::dequant::dequantize_q4_0;
+///
+/// // Create a minimal Q4_0 block (18 bytes)
+/// let mut block_data = vec![0u8; 18];
+/// // Scale = 1.0 in F16 = 0x3C00
+/// block_data[0] = 0x00;
+/// block_data[1] = 0x3C;
+/// // First byte: low nibble = 8 (becomes 0), high nibble = 9 (becomes 1)
+/// block_data[2] = 0x98; // (9 << 4) | 8
+///
+/// let values = dequantize_q4_0(&block_data).unwrap();
+/// assert_eq!(values.len(), 32);
+/// // First value: 1.0 * (8 - 8) = 0.0
+/// assert!((values[0] - 0.0).abs() < 0.1);
+/// // Second value: 1.0 * (9 - 8) = 1.0
+/// assert!((values[1] - 1.0).abs() < 0.1);
+/// ```
+pub fn dequantize_q4_0(data: &[u8]) -> Result<Vec<f32>> {
+    // Verify data length is a multiple of block size
+    if data.len() % Q4_0_BLOCK_SIZE != 0 {
+        return Err(GgufError::AlignmentError {
+            expected: Q4_0_BLOCK_SIZE,
+            actual: data.len() % Q4_0_BLOCK_SIZE,
+        });
+    }
+
+    let num_blocks = data.len() / Q4_0_BLOCK_SIZE;
+    let num_elements = num_blocks * Q4_0_BLOCK_ELEMENTS;
+    let mut result = Vec::with_capacity(num_elements);
+
+    for block_idx in 0..num_blocks {
+        let block_start = block_idx * Q4_0_BLOCK_SIZE;
+        let block_data = &data[block_start..block_start + Q4_0_BLOCK_SIZE];
+
+        // Extract scale (first 2 bytes, F16 little-endian)
+        let scale_bits = u16::from_le_bytes([block_data[0], block_data[1]]);
+        let scale = f16_to_f32(scale_bits);
+
+        // Extract and dequantize the 32 quantized values (16 bytes, 2 values per byte)
+        let quants = &block_data[2..];
+        for &byte in quants {
+            // Low nibble first (bits 0-3)
+            let q_low = (byte & 0x0F) as i32 - 8;
+            result.push(scale * q_low as f32);
+
+            // High nibble second (bits 4-7)
+            let q_high = ((byte >> 4) & 0x0F) as i32 - 8;
+            result.push(scale * q_high as f32);
+        }
+    }
+
+    Ok(result)
+}
+
+/// Dequantizes Q4_0 data into a provided buffer.
+///
+/// This variant allows reusing a buffer to avoid allocations during
+/// repeated dequantization operations.
+///
+/// # Arguments
+///
+/// * `data` - Raw byte slice containing Q4_0 blocks
+/// * `buffer` - Destination buffer (will be cleared and filled)
+///
+/// # Errors
+///
+/// Returns an error if the data length is not a multiple of the Q4_0 block size.
+pub fn dequantize_q4_0_into(data: &[u8], buffer: &mut Vec<f32>) -> Result<()> {
+    if data.len() % Q4_0_BLOCK_SIZE != 0 {
+        return Err(GgufError::AlignmentError {
+            expected: Q4_0_BLOCK_SIZE,
+            actual: data.len() % Q4_0_BLOCK_SIZE,
+        });
+    }
+
+    let num_blocks = data.len() / Q4_0_BLOCK_SIZE;
+    let num_elements = num_blocks * Q4_0_BLOCK_ELEMENTS;
+
+    buffer.clear();
+    buffer.reserve(num_elements);
+
+    for block_idx in 0..num_blocks {
+        let block_start = block_idx * Q4_0_BLOCK_SIZE;
+        let block_data = &data[block_start..block_start + Q4_0_BLOCK_SIZE];
+
+        let scale_bits = u16::from_le_bytes([block_data[0], block_data[1]]);
+        let scale = f16_to_f32(scale_bits);
+
+        let quants = &block_data[2..];
+        for &byte in quants {
+            let q_low = (byte & 0x0F) as i32 - 8;
+            buffer.push(scale * q_low as f32);
+
+            let q_high = ((byte >> 4) & 0x0F) as i32 - 8;
+            buffer.push(scale * q_high as f32);
+        }
+    }
+
+    Ok(())
+}
+
+/// Dequantizes a single Q4_0 block.
+///
+/// Useful when processing blocks individually or for testing.
+///
+/// # Arguments
+///
+/// * `block` - Exactly 18 bytes representing one Q4_0 block
+///
+/// # Returns
+///
+/// An array of 32 f32 values.
+///
+/// # Errors
+///
+/// Returns an error if the block is not exactly 18 bytes.
+pub fn dequantize_q4_0_block(block: &[u8]) -> Result<[f32; Q4_0_BLOCK_ELEMENTS]> {
+    if block.len() != Q4_0_BLOCK_SIZE {
+        return Err(GgufError::ShapeMismatch {
+            expected: Q4_0_BLOCK_SIZE,
+            got: block.len(),
+        });
+    }
+
+    let scale_bits = u16::from_le_bytes([block[0], block[1]]);
+    let scale = f16_to_f32(scale_bits);
+
+    let mut result = [0.0f32; Q4_0_BLOCK_ELEMENTS];
+    let quants = &block[2..];
+
+    for (i, &byte) in quants.iter().enumerate() {
+        let q_low = (byte & 0x0F) as i32 - 8;
+        result[i * 2] = scale * q_low as f32;
+
+        let q_high = ((byte >> 4) & 0x0F) as i32 - 8;
+        result[i * 2 + 1] = scale * q_high as f32;
+    }
+
+    Ok(result)
+}
+
+/// Dequantizes Q4_0 data with statistics collection.
+///
+/// Useful for analyzing the distribution of quantized weights.
+///
+/// # Arguments
+///
+/// * `data` - Raw byte slice containing Q4_0 blocks
+///
+/// # Returns
+///
+/// A tuple of (dequantized values, statistics).
+///
+/// # Errors
+///
+/// Returns an error if the data length is not a multiple of the Q4_0 block size.
+pub fn dequantize_q4_0_with_stats(data: &[u8]) -> Result<(Vec<f32>, DequantStats)> {
+    if data.len() % Q4_0_BLOCK_SIZE != 0 {
+        return Err(GgufError::AlignmentError {
+            expected: Q4_0_BLOCK_SIZE,
+            actual: data.len() % Q4_0_BLOCK_SIZE,
+        });
+    }
+
+    let num_blocks = data.len() / Q4_0_BLOCK_SIZE;
+    let num_elements = num_blocks * Q4_0_BLOCK_ELEMENTS;
+
+    let mut result = Vec::with_capacity(num_elements);
+    let mut stats = DequantStats::new();
+    stats.num_blocks = num_blocks;
+    stats.num_elements = num_elements;
+
+    for block_idx in 0..num_blocks {
+        let block_start = block_idx * Q4_0_BLOCK_SIZE;
+        let block_data = &data[block_start..block_start + Q4_0_BLOCK_SIZE];
+
+        let scale_bits = u16::from_le_bytes([block_data[0], block_data[1]]);
+        let scale = f16_to_f32(scale_bits);
+        stats.update_scale(scale);
+
+        let quants = &block_data[2..];
+        for &byte in quants {
+            let q_low = (byte & 0x0F) as i32 - 8;
+            let value_low = scale * q_low as f32;
+            stats.update_value(value_low);
+            result.push(value_low);
+
+            let q_high = ((byte >> 4) & 0x0F) as i32 - 8;
+            let value_high = scale * q_high as f32;
+            stats.update_value(value_high);
+            result.push(value_high);
+        }
+    }
+
+    Ok((result, stats))
+}
+
+/// Calculates the expected number of elements from Q4_0 data size.
+///
+/// # Arguments
+///
+/// * `data_size` - Size of Q4_0 data in bytes
+///
+/// # Returns
+///
+/// Number of f32 elements that would result from dequantization,
+/// or `None` if the size is not a valid Q4_0 data size.
+#[must_use]
+pub const fn q4_0_element_count(data_size: usize) -> Option<usize> {
+    if data_size % Q4_0_BLOCK_SIZE != 0 {
+        None
+    } else {
+        Some((data_size / Q4_0_BLOCK_SIZE) * Q4_0_BLOCK_ELEMENTS)
+    }
+}
+
+/// Calculates the Q4_0 data size needed for a given number of elements.
+///
+/// # Arguments
+///
+/// * `num_elements` - Number of f32 elements
+///
+/// # Returns
+///
+/// Size in bytes of Q4_0 data needed, or `None` if the element count
+/// is not a multiple of 32 (the block size).
+#[must_use]
+pub const fn q4_0_data_size(num_elements: usize) -> Option<usize> {
+    if num_elements % Q4_0_BLOCK_ELEMENTS != 0 {
+        None
+    } else {
+        Some((num_elements / Q4_0_BLOCK_ELEMENTS) * Q4_0_BLOCK_SIZE)
+    }
+}
+
+/// Creates a Q4_0 block from f32 values (for testing).
+///
+/// This performs simple quantization by finding the maximum absolute value
+/// and scaling all values to fit in 4-bit signed range (-8 to +7).
+///
+/// # Arguments
+///
+/// * `values` - Exactly 32 f32 values to quantize
+///
+/// # Returns
+///
+/// An 18-byte Q4_0 block.
+///
+/// # Panics
+///
+/// Panics if `values` does not contain exactly 32 elements.
+#[must_use]
+pub fn create_q4_0_block(values: &[f32]) -> [u8; Q4_0_BLOCK_SIZE] {
+    assert_eq!(
+        values.len(),
+        Q4_0_BLOCK_ELEMENTS,
+        "Q4_0 block requires exactly 32 values"
+    );
+
+    // Find maximum absolute value for scale calculation
+    let max_abs = values
+        .iter()
+        .map(|v| v.abs())
+        .fold(0.0f32, |a, b| a.max(b));
+
+    // Calculate scale (map max_abs to 7, the max positive value in 4-bit signed)
+    let scale = if max_abs == 0.0 {
+        0.0
+    } else {
+        max_abs / 7.0
+    };
+
+    // Convert scale to F16
+    let scale_f16 = super::quantization::f32_to_f16(scale);
+
+    let mut block = [0u8; Q4_0_BLOCK_SIZE];
+
+    // Write scale (little-endian)
+    block[0..2].copy_from_slice(&scale_f16.to_le_bytes());
+
+    // Quantize values (pack 2 per byte)
+    if scale > 0.0 {
+        let inv_scale = 1.0 / scale;
+        for i in 0..16 {
+            // Low nibble (even index)
+            let v_low = values[i * 2];
+            let q_low = ((v_low * inv_scale).round() as i32 + 8).clamp(0, 15) as u8;
+
+            // High nibble (odd index)
+            let v_high = values[i * 2 + 1];
+            let q_high = ((v_high * inv_scale).round() as i32 + 8).clamp(0, 15) as u8;
+
+            block[2 + i] = q_low | (q_high << 4);
+        }
+    } else {
+        // If scale is 0, all quants should be 8 (which maps to 0 after -8 offset)
+        for i in 0..16 {
+            block[2 + i] = 0x88; // Both nibbles = 8
+        }
+    }
+
+    block
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -696,5 +1031,299 @@ mod tests {
         // Verify first block (scale ≈ 0.01)
         assert!(values[0].abs() < 0.01); // 0.01 * 0 = 0
         assert!((values[1] - 0.01).abs() < 0.01); // 0.01 * 1 ≈ 0.01
+    }
+
+    // =========================================================================
+    // Q4_0 Tests
+    // =========================================================================
+
+    const Q4_0_EPSILON: f32 = 0.5; // Q4_0 has lower precision than Q8_0
+
+    fn q4_0_approx_eq(a: f32, b: f32) -> bool {
+        (a - b).abs() < Q4_0_EPSILON
+    }
+
+    #[test]
+    fn test_dequantize_q4_0_single_block() {
+        // Create a Q4_0 block with scale=1.0
+        // Each byte packs 2 values: low nibble (bits 0-3) and high nibble (bits 4-7)
+        // Value = scale * (nibble - 8), so nibble=8 -> 0, nibble=9 -> 1, etc.
+        let mut block_data = Vec::new();
+
+        // Scale = 1.0 in F16 = 0x3C00
+        block_data.extend_from_slice(&0x3C00u16.to_le_bytes());
+
+        // 16 bytes for 32 values
+        // We'll create values: 0, 1, 0, 1, 0, 1, ... (alternating)
+        // nibble=8 gives 0, nibble=9 gives 1
+        for _ in 0..16 {
+            // Low nibble = 8 (value 0), high nibble = 9 (value 1)
+            block_data.push(0x98); // (9 << 4) | 8
+        }
+
+        let values = dequantize_q4_0(&block_data).unwrap();
+
+        assert_eq!(values.len(), 32);
+        for i in 0..32 {
+            let expected = if i % 2 == 0 { 0.0 } else { 1.0 };
+            assert!(
+                q4_0_approx_eq(values[i], expected),
+                "Mismatch at {i}: expected {expected}, got {}",
+                values[i]
+            );
+        }
+    }
+
+    #[test]
+    fn test_dequantize_q4_0_negative_values() {
+        let mut block_data = Vec::new();
+
+        // Scale = 2.0 in F16 = 0x4000
+        block_data.extend_from_slice(&0x4000u16.to_le_bytes());
+
+        // Create values that span the range
+        // nibble=0 -> -8, nibble=15 -> +7
+        // Let's do: (-8, +7) pairs
+        for _ in 0..16 {
+            // Low nibble = 0 (value = 2.0 * (0-8) = -16)
+            // High nibble = 15 (value = 2.0 * (15-8) = 14)
+            block_data.push(0xF0); // (15 << 4) | 0
+        }
+
+        let values = dequantize_q4_0(&block_data).unwrap();
+
+        assert_eq!(values.len(), 32);
+        // Even indices: -16.0
+        assert!(q4_0_approx_eq(values[0], -16.0));
+        // Odd indices: +14.0
+        assert!(q4_0_approx_eq(values[1], 14.0));
+    }
+
+    #[test]
+    fn test_dequantize_q4_0_multiple_blocks() {
+        let mut data = Vec::new();
+
+        // Block 1: scale=1.0, all zeros (nibbles = 8)
+        data.extend_from_slice(&0x3C00u16.to_le_bytes());
+        data.extend_from_slice(&[0x88u8; 16]); // (8 << 4) | 8 = 0x88
+
+        // Block 2: scale=0.5, alternating -4 and +3
+        // -4 = 0.5 * (4-8), +3 = 0.5 * (14-8) = 0.5 * 6 = 3
+        // Wait, let me recalculate: +3 needs (q-8)*0.5 = 3, so q-8 = 6, q = 14
+        data.extend_from_slice(&0x3800u16.to_le_bytes()); // scale=0.5
+        data.extend_from_slice(&[0xE4u8; 16]); // (14 << 4) | 4 = 0xE4
+
+        let values = dequantize_q4_0(&data).unwrap();
+
+        assert_eq!(values.len(), 64);
+
+        // First block: all zeros
+        for &v in &values[0..32] {
+            assert!(q4_0_approx_eq(v, 0.0), "Expected 0.0, got {v}");
+        }
+
+        // Second block: alternating -2.0 and +3.0
+        // Actually: 0.5 * (4-8) = 0.5 * (-4) = -2.0
+        //           0.5 * (14-8) = 0.5 * 6 = 3.0
+        for i in 32..64 {
+            let expected = if (i - 32) % 2 == 0 { -2.0 } else { 3.0 };
+            assert!(
+                q4_0_approx_eq(values[i], expected),
+                "Mismatch at {i}: expected {expected}, got {}",
+                values[i]
+            );
+        }
+    }
+
+    #[test]
+    fn test_dequantize_q4_0_invalid_length() {
+        // Not a multiple of 18 bytes
+        let data = vec![0u8; 19];
+        let result = dequantize_q4_0(&data);
+
+        assert!(result.is_err());
+        assert!(matches!(result, Err(GgufError::AlignmentError { .. })));
+    }
+
+    #[test]
+    fn test_dequantize_q4_0_empty() {
+        let data: Vec<u8> = vec![];
+        let values = dequantize_q4_0(&data).unwrap();
+
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn test_dequantize_q4_0_into() {
+        let mut block_data = Vec::new();
+        block_data.extend_from_slice(&0x3C00u16.to_le_bytes()); // scale=1.0
+        block_data.extend_from_slice(&[0x88u8; 16]); // all zeros
+
+        let mut buffer = Vec::new();
+        dequantize_q4_0_into(&block_data, &mut buffer).unwrap();
+
+        assert_eq!(buffer.len(), 32);
+        for &v in &buffer {
+            assert!(q4_0_approx_eq(v, 0.0));
+        }
+
+        // Reuse buffer
+        block_data.clear();
+        block_data.extend_from_slice(&0x4000u16.to_le_bytes()); // scale=2.0
+        block_data.extend_from_slice(&[0x99u8; 16]); // nibbles = 9, value = 2*(9-8) = 2
+
+        dequantize_q4_0_into(&block_data, &mut buffer).unwrap();
+        assert_eq!(buffer.len(), 32);
+        for &v in &buffer {
+            assert!(q4_0_approx_eq(v, 2.0));
+        }
+    }
+
+    #[test]
+    fn test_dequantize_q4_0_block() {
+        let mut block = [0u8; 18];
+        block[0..2].copy_from_slice(&0x3C00u16.to_le_bytes()); // scale=1.0
+        // Create sequential values: 0, 1, 2, 3, 4, 5, 6, 7, -8, -7, ...
+        // This requires nibbles: 8, 9, 10, 11, 12, 13, 14, 15, 0, 1, ...
+        for i in 0..16 {
+            let low = ((i * 2) % 16) as u8; // Will wrap: 0,2,4,6,8,10,12,14,0,2,...
+            let high = ((i * 2 + 1) % 16) as u8;
+            block[2 + i] = low | (high << 4);
+        }
+
+        let values = dequantize_q4_0_block(&block).unwrap();
+
+        assert_eq!(values.len(), 32);
+        // Verify the pattern
+        for i in 0..32 {
+            let nibble = (i % 16) as i32;
+            let expected = (nibble - 8) as f32;
+            assert!(
+                q4_0_approx_eq(values[i], expected),
+                "Mismatch at {i}: expected {expected}, got {}",
+                values[i]
+            );
+        }
+    }
+
+    #[test]
+    fn test_dequantize_q4_0_block_wrong_size() {
+        let block = [0u8; 17]; // Wrong size
+        let result = dequantize_q4_0_block(&block);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_dequantize_q4_0_with_stats() {
+        let mut data = Vec::new();
+
+        // Block with scale=1.0, values from -8 to +7 (nibbles 0 to 15)
+        data.extend_from_slice(&0x3C00u16.to_le_bytes());
+        for i in 0..16u8 {
+            // Pack sequential nibbles
+            let low = i;
+            let high = (i + 1) % 16;
+            data.push(low | (high << 4));
+        }
+
+        let (values, stats) = dequantize_q4_0_with_stats(&data).unwrap();
+
+        assert_eq!(values.len(), 32);
+        assert_eq!(stats.num_blocks, 1);
+        assert_eq!(stats.num_elements, 32);
+        assert!(approx_eq(stats.min_scale, 1.0));
+        assert!(approx_eq(stats.max_scale, 1.0));
+        // Min value should be -8 (nibble 0)
+        assert!(q4_0_approx_eq(stats.min_value, -8.0));
+        // Max value should be +7 (nibble 15)
+        assert!(q4_0_approx_eq(stats.max_value, 7.0));
+    }
+
+    #[test]
+    fn test_q4_0_element_count() {
+        assert_eq!(q4_0_element_count(0), Some(0));
+        assert_eq!(q4_0_element_count(18), Some(32));
+        assert_eq!(q4_0_element_count(36), Some(64));
+        assert_eq!(q4_0_element_count(19), None); // Invalid
+    }
+
+    #[test]
+    fn test_q4_0_data_size() {
+        assert_eq!(q4_0_data_size(0), Some(0));
+        assert_eq!(q4_0_data_size(32), Some(18));
+        assert_eq!(q4_0_data_size(64), Some(36));
+        assert_eq!(q4_0_data_size(33), None); // Not multiple of 32
+    }
+
+    #[test]
+    fn test_create_q4_0_block() {
+        // Create block from known values
+        let values: Vec<f32> = (-8..24).map(|i| i as f32).take(32).collect();
+        let block = create_q4_0_block(&values);
+
+        // Dequantize and verify roundtrip
+        let recovered = dequantize_q4_0_block(&block).unwrap();
+
+        // Q4_0 has lower precision, so we allow larger error
+        for (i, (&orig, &recov)) in values.iter().zip(recovered.iter()).enumerate() {
+            let error = (orig - recov).abs();
+            // With only 4 bits, error can be significant
+            assert!(
+                error < 3.0,
+                "Roundtrip error at {i}: orig={orig}, recovered={recov}, error={error}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_create_q4_0_block_zeros() {
+        let values = vec![0.0f32; 32];
+        let block = create_q4_0_block(&values);
+        let recovered = dequantize_q4_0_block(&block).unwrap();
+
+        for &v in &recovered {
+            assert!(q4_0_approx_eq(v, 0.0));
+        }
+    }
+
+    #[test]
+    fn test_create_q4_0_block_small_values() {
+        // Test with values that fit well in 4-bit range
+        let values: Vec<f32> = (0..32).map(|i| (i as f32 - 16.0) * 0.5).collect();
+        let block = create_q4_0_block(&values);
+        let recovered = dequantize_q4_0_block(&block).unwrap();
+
+        for (orig, recov) in values.iter().zip(recovered.iter()) {
+            let error = (orig - recov).abs();
+            assert!(error < 2.0);
+        }
+    }
+
+    #[test]
+    #[allow(clippy::cast_precision_loss)]
+    fn test_dequantize_q4_0_large() {
+        // Test with multiple blocks
+        let num_blocks = 100;
+        let mut data = Vec::with_capacity(num_blocks * Q4_0_BLOCK_SIZE);
+
+        for block_idx in 0..num_blocks {
+            // Varying scales
+            let scale = (block_idx + 1) as f32 * 0.1;
+            let scale_f16 = super::super::quantization::f32_to_f16(scale);
+            data.extend_from_slice(&scale_f16.to_le_bytes());
+
+            // All nibbles = 8 (value = 0)
+            data.extend_from_slice(&[0x88u8; 16]);
+        }
+
+        let values = dequantize_q4_0(&data).unwrap();
+
+        assert_eq!(values.len(), num_blocks * 32);
+
+        // All values should be 0 (scale * (8-8) = 0)
+        for &v in &values {
+            assert!(q4_0_approx_eq(v, 0.0));
+        }
     }
 }
