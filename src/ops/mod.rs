@@ -15,4 +15,4 @@
 pub mod matmul;
 
 // CHANGED: flat re-exports for the most common entry-points
-pub use matmul::matmul_naive;
+pub use matmul::{matmul_naive, matmul_blocked, matmul_blocked_with_block_size};
