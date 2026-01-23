@@ -1,0 +1,18 @@
+//! Core neural-network operations.
+//!
+//! This module is the home for all compute primitives:
+//!
+//! | Sub-module  | Contents                              | Status      |
+//! |-------------|---------------------------------------|-------------|
+//! | `matmul`    | GEMM variants (naive → SIMD)          | 🔜 M2 week 5 |
+//! | `norm`      | RMSNorm, LayerNorm                    | 🔜 M2 week 6 |
+//! | `activation`| SiLU, SwiGLU                          | 🔜 M2 week 6 |
+//! | `rope`      | Rotary Positional Embeddings          | 🔜 M2 week 6 |
+//! | `softmax`   | Numerically-stable softmax            | 🔜 M2 week 6 |
+//! | `fusion`    | Op-fusion infrastructure              | 🔜 M2 week 5 |
+
+// CHANGED: declare sub-modules as they land commit-by-commit
+pub mod matmul;
+
+// CHANGED: flat re-exports for the most common entry-points
+pub use matmul::matmul_naive;

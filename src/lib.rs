@@ -41,8 +41,10 @@ pub mod tensor;
 // Re-exports for convenience
 pub use tensor::{Shape, Stride, Tensor, TensorView};
 
+// CHANGED: ops module activated in commit 5.1
+pub mod ops;
+
 // Future modules
-// pub mod ops;
 // pub mod model;
 // pub mod cache;
 // pub mod quant;
