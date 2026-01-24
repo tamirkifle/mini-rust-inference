@@ -13,8 +13,10 @@
 
 // CHANGED: declare sub-modules as they land commit-by-commit
 pub mod matmul;
-pub mod matvec; // CHANGED: commit 5.3
+pub mod matvec;  // commit 5.3
+pub mod fusion;  // CHANGED: commit 5.4
 
 // CHANGED: flat re-exports for the most common entry-points
 pub use matmul::{matmul_naive, matmul_blocked, matmul_blocked_with_block_size};
-pub use matvec::{matvec, matvec_2d}; // CHANGED: commit 5.3
+pub use matvec::{matvec, matvec_2d};
+pub use fusion::{matmul_fused, FusedOp, BiasAdd, Activation, ActivationFn, Chain}; // CHANGED: commit 5.4
