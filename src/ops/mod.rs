@@ -13,12 +13,14 @@
 
 // CHANGED: declare sub-modules as they land commit-by-commit
 pub mod matmul;
-pub mod matvec;  // commit 5.3
-pub mod fusion;  // commit 5.4
-pub mod norm;    // CHANGED: commit 6.1
+pub mod matvec;       // commit 5.3
+pub mod fusion;       // commit 5.4
+pub mod norm;         // commit 6.1
+pub mod activation;   // CHANGED: commit 6.2
 
 // CHANGED: flat re-exports for the most common entry-points
 pub use matmul::{matmul_naive, matmul_blocked, matmul_blocked_with_block_size};
 pub use matvec::{matvec, matvec_2d};
 pub use fusion::{matmul_fused, FusedOp, BiasAdd, Activation, ActivationFn, Chain}; // commit 5.4
-pub use norm::{rmsnorm, rmsnorm_inplace, DEFAULT_EPS}; // CHANGED: commit 6.1
+pub use norm::{rmsnorm, rmsnorm_inplace, DEFAULT_EPS};                    // commit 6.1
+pub use activation::{silu, silu_inplace, silu_scalar, swiglu, swiglu_inplace}; // CHANGED: commit 6.2
