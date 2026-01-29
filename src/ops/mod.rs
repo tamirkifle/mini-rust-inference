@@ -17,7 +17,8 @@ pub mod matvec;       // commit 5.3
 pub mod fusion;       // commit 5.4
 pub mod norm;         // commit 6.1
 pub mod activation;   // commit 6.2
-pub mod rope;         // CHANGED: commit 6.3
+pub mod rope;         // commit 6.3
+pub mod softmax;      // CHANGED: commit 6.4
 
 // CHANGED: flat re-exports for the most common entry-points
 pub use matmul::{matmul_naive, matmul_blocked, matmul_blocked_with_block_size};
@@ -25,4 +26,5 @@ pub use matvec::{matvec, matvec_2d};
 pub use fusion::{matmul_fused, FusedOp, BiasAdd, Activation, ActivationFn, Chain}; // commit 5.4
 pub use norm::{rmsnorm, rmsnorm_inplace, DEFAULT_EPS};                    // commit 6.1
 pub use activation::{silu, silu_inplace, silu_scalar, swiglu, swiglu_inplace}; // commit 6.2
-pub use rope::{RopeTable, rope_apply, rope_apply_copy};                        // CHANGED: commit 6.3
+pub use rope::{RopeTable, rope_apply, rope_apply_copy};                        // commit 6.3
+pub use softmax::{softmax, softmax_dim, softmax_inplace};                      // CHANGED: commit 6.4
