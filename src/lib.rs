@@ -44,6 +44,9 @@ pub use tensor::{Shape, Stride, Tensor, TensorView};
 // CHANGED: ops module activated in commit 5.1
 pub mod ops;
 
+// CHANGED: attention module activated in commit 7.1
+pub mod attention;
+
 // Future modules
 // pub mod model;
 // pub mod cache;
