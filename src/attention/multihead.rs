@@ -26,8 +26,6 @@
 use crate::tensor::{Result, Tensor, TensorError};
 use crate::attention::sdpa::scaled_dot_product_attention_with_bias;
 use crate::attention::mask::causal_mask;
-use crate::ops::softmax;
-use crate::ops::matmul_naive;
 
 // ── head split / concat helpers ─────────────────────────────────────────────
 
