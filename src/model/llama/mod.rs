@@ -10,5 +10,4 @@ pub mod block;
 // Re-exports for convenience
 pub use config::LlamaConfig;
 pub use weights::{GlobalWeightRole, WeightRole, global_weight_name, weight_name};
-// TransformerBlock re-exported once commit 8.1 implements it
-// pub use block::TransformerBlock;
+pub use block::TransformerBlock; // CHANGED: commit 8.1
