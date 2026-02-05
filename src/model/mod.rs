@@ -6,6 +6,7 @@
 // CHANGED: model module activated in commit 8.0
 pub mod llama;
 
+use crate::gguf::GgufError;
 use crate::tensor::TensorError;
 
 /// Errors that can occur during model construction or forward passes.
@@ -17,6 +18,8 @@ pub enum ModelError {
     TensorError(TensorError),
     /// A configuration value is invalid (e.g., n_heads doesn't divide embed_dim).
     InvalidConfig { reason: String },
+    /// Weight loading from a GGUF file failed.
+    LoadError(String), // CHANGED: commit 8.2
 }
 
 impl std::fmt::Display for ModelError {
@@ -27,6 +30,7 @@ impl std::fmt::Display for ModelError {
             }
             Self::TensorError(e) => write!(f, "tensor error: {e}"),
             Self::InvalidConfig { reason } => write!(f, "invalid model config: {reason}"),
+            Self::LoadError(msg) => write!(f, "weight load error: {msg}"), // CHANGED: commit 8.2
         }
     }
 }
@@ -37,6 +41,13 @@ impl std::error::Error for ModelError {}
 impl From<TensorError> for ModelError {
     fn from(e: TensorError) -> Self {
         Self::TensorError(e)
+    }
+}
+
+// CHANGED: commit 8.2 — auto-convert GgufError → ModelError for from_loader
+impl From<GgufError> for ModelError {
+    fn from(e: GgufError) -> Self {
+        Self::LoadError(e.to_string())
     }
 }
 

@@ -7,7 +7,11 @@ pub mod weights;
 // CHANGED: commit 8.1 — single transformer block
 pub mod block;
 
+// CHANGED: commit 8.2 — full model forward pass
+pub mod forward;
+
 // Re-exports for convenience
 pub use config::LlamaConfig;
 pub use weights::{GlobalWeightRole, WeightRole, global_weight_name, weight_name};
-pub use block::TransformerBlock; // CHANGED: commit 8.1
+pub use block::TransformerBlock;
+pub use forward::LlamaModel; // CHANGED: commit 8.2
