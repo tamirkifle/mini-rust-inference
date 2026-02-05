@@ -47,8 +47,10 @@ pub mod ops;
 // CHANGED: attention module activated in commit 7.1
 pub mod attention;
 
+// CHANGED: model module activated in commit 8.0
+pub mod model;
+
 // Future modules
-// pub mod model;
 // pub mod cache;
 // pub mod quant;
 // pub mod simd;
