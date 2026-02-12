@@ -50,6 +50,9 @@ pub mod attention;
 // CHANGED: model module activated in commit 8.0
 pub mod model;
 
+// CHANGED: tokenizer module activated in commit 8.4
+pub mod tokenizer;
+
 // Future modules
 // pub mod cache;
 // pub mod quant;

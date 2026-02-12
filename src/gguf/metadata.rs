@@ -380,6 +380,24 @@ impl MetadataValue {
         }
     }
 
+    /// Returns the value as an f32 array slice, if applicable. // CHANGED: commit 8.4
+    #[must_use]
+    pub fn as_f32_array(&self) -> Option<&[f32]> {
+        match self {
+            Self::Float32Array(v) => Some(v.as_slice()),
+            _ => None,
+        }
+    }
+
+    /// Returns the value as an i32 array slice, if applicable. // CHANGED: commit 8.4
+    #[must_use]
+    pub fn as_i32_array(&self) -> Option<&[i32]> {
+        match self {
+            Self::Int32Array(v) => Some(v.as_slice()),
+            _ => None,
+        }
+    }
+
     /// Returns the value as a string array slice, if applicable.
     #[must_use]
     pub fn as_string_array(&self) -> Option<&[String]> {
@@ -542,6 +560,16 @@ pub mod keys {
     pub const LLAMA_CONTEXT_LENGTH: &str = "llama.context_length";
     /// Vocabulary size.
     pub const TOKENIZER_GGML_TOKENS: &str = "tokenizer.ggml.tokens";
+    /// BPE merge rules ("a b" → "ab"), ordered by priority. // CHANGED: commit 8.4
+    pub const TOKENIZER_GGML_MERGES: &str = "tokenizer.ggml.merges";
+    /// Per-token scores (log-probabilities for SentencePiece BPE). // CHANGED: commit 8.4
+    pub const TOKENIZER_GGML_SCORES: &str = "tokenizer.ggml.scores";
+    /// Per-token type flags (1=normal, 2=unknown, 3=control, 6=byte). // CHANGED: commit 8.4
+    pub const TOKENIZER_GGML_TOKEN_TYPE: &str = "tokenizer.ggml.token_type";
+    /// Beginning-of-sequence token ID. // CHANGED: commit 8.4
+    pub const TOKENIZER_GGML_BOS_TOKEN_ID: &str = "tokenizer.ggml.bos_token_id";
+    /// End-of-sequence token ID. // CHANGED: commit 8.4
+    pub const TOKENIZER_GGML_EOS_TOKEN_ID: &str = "tokenizer.ggml.eos_token_id";
 }
 
 #[cfg(test)]
