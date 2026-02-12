@@ -53,6 +53,10 @@ pub mod model;
 // CHANGED: tokenizer module activated in commit 8.4
 pub mod tokenizer;
 
+// CHANGED: sampling + generation loop activated in commit 8.5
+pub mod sampling;
+pub mod generate;
+
 // Future modules
 // pub mod cache;
 // pub mod quant;
