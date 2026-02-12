@@ -57,8 +57,10 @@ pub mod tokenizer;
 pub mod sampling;
 pub mod generate;
 
+// CHANGED: cache module activated in commit 9.1
+pub mod cache;
+
 // Future modules
-// pub mod cache;
 // pub mod quant;
 // pub mod simd;
 
