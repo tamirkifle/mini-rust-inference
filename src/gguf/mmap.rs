@@ -177,6 +177,24 @@ impl MappedFile {
         self.mmap.advise(memmap2::Advice::WillNeed)
     }
 
+    /// Advises the OS about a specific byte range within the mapping.
+    ///
+    /// `offset` and `len` are in bytes relative to the start of the mapping.
+    /// Pass `willneed = true` to prefetch (WillNeed).
+    /// `false` is a no-op on this API; `DontNeed` requires `unsafe` in memmap2.
+    ///
+    /// Silently no-ops if `offset + len` exceeds the mapping length.
+    #[cfg(unix)]
+    pub fn advise_range(&self, willneed: bool, offset: usize, len: usize) -> io::Result<()> {
+        if !willneed {
+            return Ok(()); // DontNeed requires unsafe; skip — OS evicts naturally
+        }
+        if offset.saturating_add(len) > self.mmap.len() {
+            return Ok(());
+        }
+        self.mmap.advise_range(memmap2::Advice::WillNeed, offset, len)
+    }
+
     /// Non-Unix platforms: no-op
     #[cfg(not(unix))]
     pub fn advise_sequential(&self) -> io::Result<()> {
@@ -190,6 +208,11 @@ impl MappedFile {
 
     #[cfg(not(unix))]
     pub fn advise_willneed(&self) -> io::Result<()> {
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    pub fn advise_range(&self, _willneed: bool, _offset: usize, _len: usize) -> io::Result<()> {
         Ok(())
     }
 }

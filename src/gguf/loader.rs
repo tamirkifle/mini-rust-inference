@@ -266,6 +266,54 @@ impl GgufLoader {
         Self::get_alignment(&self.metadata)
     }
 
+    /// Exposes the raw memory-map bytes for offset calculations.
+    ///
+    /// Primarily used by `model::mmap_weights::WeightAccessor` to issue
+    /// per-region OS page hints.
+    #[must_use]
+    pub fn mmap_data(&self) -> &[u8] {
+        self.mmap.as_slice()
+    }
+
+    /// Advises the OS to use sequential read-ahead for the full mmap.
+    ///
+    /// Useful during prefill when weights are accessed layer by layer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the OS advise call fails (rare; treated as a hint).
+    pub fn mmap_advise_sequential(&self) -> std::io::Result<()> {
+        self.mmap.advise_sequential()
+    }
+
+    /// Advises the OS to disable read-ahead for the full mmap.
+    ///
+    /// Useful during decode when weights are accessed in small random jumps.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`mmap_advise_sequential`](Self::mmap_advise_sequential).
+    pub fn mmap_advise_random(&self) -> std::io::Result<()> {
+        self.mmap.advise_random()
+    }
+
+    /// Issues a per-region `WillNeed` or `DontNeed` hint for a byte range.
+    ///
+    /// Pass `willneed = true` to prefetch `[offset, offset+len)`, or
+    /// `false` to release those pages under memory pressure.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`mmap_advise_sequential`](Self::mmap_advise_sequential).
+    pub fn mmap_advise_region(
+        &self,
+        willneed: bool,
+        offset: usize,
+        len: usize,
+    ) -> std::io::Result<()> {
+        self.mmap.advise_range(willneed, offset, len)
+    }
+
     /// Extracts alignment from metadata or uses default.
     fn get_alignment(metadata: &Metadata) -> usize {
         metadata

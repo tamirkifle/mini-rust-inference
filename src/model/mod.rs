@@ -6,6 +6,9 @@
 // CHANGED: model module activated in commit 8.0
 pub mod llama;
 
+// CHANGED: mmap weight access with demand-paging hints — commit 10.3
+pub mod mmap_weights;
+
 use crate::gguf::GgufError;
 use crate::tensor::TensorError;
 
