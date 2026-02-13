@@ -7,5 +7,7 @@
 //! - `stats`: Allocation instrumentation and reporting (commit 10.4)
 
 pub mod pool;
+pub mod arena;
 
 pub use pool::{PoolStats, TensorPool};
+pub use arena::Arena;
