@@ -60,6 +60,9 @@ pub mod generate;
 // CHANGED: cache module activated in commit 9.1
 pub mod cache;
 
+// CHANGED: memory subsystem activated in commit 10.1
+pub mod memory;
+
 // Future modules
 // pub mod quant;
 // pub mod simd;
