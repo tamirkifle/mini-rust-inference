@@ -70,7 +70,32 @@ impl LlamaModel {
 
     /// Return the model configuration.
     #[must_use]
-    pub fn config(&self) -> &LlamaConfig { &self.config } // CHANGED
+    pub fn config(&self) -> &LlamaConfig { &self.config }
+
+    // ── accessors used by ChunkedPrefill ──────────────────────────────────
+
+    /// Slice of transformer blocks (one per layer).
+    #[must_use]
+    pub fn blocks(&self) -> &[TransformerBlock] { &self.blocks }
+
+    /// Final RMSNorm scale vector `[embed_dim]`.
+    #[must_use]
+    pub fn output_norm(&self) -> &Tensor<f32> { &self.output_norm }
+
+    /// Unembedding matrix `[vocab_size, embed_dim]`.
+    #[must_use]
+    pub fn output_weight(&self) -> &Tensor<f32> { &self.output }
+
+    /// Embed a slice of token IDs into `[seq, embed_dim]`.
+    ///
+    /// Public so that `ChunkedPrefill` can call it without duplicating the logic.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelError::InvalidConfig`] if any token ID ≥ vocab_size.
+    pub fn embed_tokens(&self, tokens: &[u32]) -> Result<Tensor<f32>> {
+        embed(&self.token_embd, tokens)
+    }
 
     /// Load a model from a GGUF file.
     ///

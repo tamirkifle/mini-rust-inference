@@ -1,4 +1,4 @@
-//! Single Llama transformer block — commit 8.1.
+//! Single Llama transformer block — commit 8.1 / 11.2.
 //!
 //! Implements one transformer layer:
 //!
@@ -27,6 +27,7 @@
 //! | `wdown` | `[embed_dim, ffn_dim]` |
 //! | `ffn_norm` | `[embed_dim]` |
 
+use crate::cache::KvCache;
 use crate::model::{ModelError, Result};
 use crate::ops::{
     matmul::matmul_blocked,
@@ -34,6 +35,7 @@ use crate::ops::{
     activation::swiglu,
     rope::{RopeTable, rope_apply},
 };
+use crate::attention::cached::cached_attention_prefill;
 use crate::attention::gqa::grouped_query_attention_causal_with_offset;
 use crate::tensor::Tensor;
 
@@ -43,7 +45,7 @@ use crate::tensor::Tensor;
 ///
 /// Constructed by injecting pre-loaded weight tensors.  In a full pipeline
 /// these come from `TensorExtractor`; in tests they can be synthetic.
-pub struct TransformerBlock { // CHANGED
+pub struct TransformerBlock {
     wq: Tensor<f32>,
     wk: Tensor<f32>,
     wv: Tensor<f32>,
@@ -63,7 +65,7 @@ impl TransformerBlock {
     /// Create a new transformer block from pre-loaded weight tensors.
     #[allow(clippy::too_many_arguments)]
     #[must_use]
-    pub fn new( // CHANGED
+    pub fn new(
         wq: Tensor<f32>, wk: Tensor<f32>, wv: Tensor<f32>, wo: Tensor<f32>,
         attn_norm: Tensor<f32>, wgate: Tensor<f32>, wup: Tensor<f32>,
         wdown: Tensor<f32>, ffn_norm: Tensor<f32>, rope_table: RopeTable,
@@ -75,58 +77,111 @@ impl TransformerBlock {
 
     /// Run one forward pass through the transformer block.
     ///
-    /// `x` — `[seq_len, embed_dim]`.  `start_pos` — 0 for prefill.
+    /// `x` — `[seq_len, embed_dim]`.  `start_pos` — 0 for full prefill.
     ///
     /// # Errors
     ///
     /// Returns [`ModelError`] if any underlying tensor operation fails.
-    pub fn forward(&self, x: &Tensor<f32>, start_pos: usize) -> Result<Tensor<f32>> { // CHANGED
+    pub fn forward(&self, x: &Tensor<f32>, start_pos: usize) -> Result<Tensor<f32>> {
         let x = self.attention_sublayer(x, start_pos)?;
         let x = self.ffn_sublayer(&x)?;
         Ok(x)
     }
 
+    /// Cached forward pass: writes K/V into `cache` at `layer`, enabling
+    /// cross-chunk attention during chunked prefill.
+    ///
+    /// # Arguments
+    ///
+    /// * `x`         – `[seq_len, embed_dim]`
+    /// * `start_pos` – absolute position of the first token in `x`
+    ///                 (0 for the first chunk, `chunk_size` for the second, etc.)
+    /// * `cache`     – mutable KV-cache; written at `[start_pos .. start_pos + seq_len)`
+    /// * `layer`     – which layer slot in the cache to write
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelError`] if any tensor operation or cache write fails.
+    pub fn forward_cached(
+        &self,
+        x: &Tensor<f32>,
+        start_pos: usize,
+        cache: &mut KvCache,
+        layer: usize,
+    ) -> Result<Tensor<f32>> {
+        let x = self.attention_sublayer_cached(x, start_pos, cache, layer)?;
+        let x = self.ffn_sublayer(&x)?;
+        Ok(x)
+    }
+
     fn attention_sublayer(&self, x: &Tensor<f32>, start_pos: usize) -> Result<Tensor<f32>> {
-        let seq = x.dims()[0]; // CHANGED
-        let normed = rmsnorm(x, &self.attn_norm, self.rms_norm_eps)?; // CHANGED
-        let mut q = proj(&normed, &self.wq)?; // CHANGED
-        let mut k = proj(&normed, &self.wk)?; // CHANGED
-        let v = proj(&normed, &self.wv)?;     // CHANGED
+        let seq = x.dims()[0];
+        let normed = rmsnorm(x, &self.attn_norm, self.rms_norm_eps)?;
+        let mut q = proj(&normed, &self.wq)?;
+        let mut k = proj(&normed, &self.wk)?;
+        let v = proj(&normed, &self.wv)?;
         let head_dim_q = q.dims()[1] / self.n_heads;
         let head_dim_k = k.dims()[1] / self.n_kv_heads;
-        q = q.reshape(vec![seq, self.n_heads, head_dim_q])?;    // CHANGED
-        k = k.reshape(vec![seq, self.n_kv_heads, head_dim_k])?; // CHANGED
-        rope_apply(&mut q, &self.rope_table, start_pos)?; // CHANGED
-        rope_apply(&mut k, &self.rope_table, start_pos)?; // CHANGED
-        q = q.reshape(vec![seq, self.n_heads * head_dim_q])?;    // CHANGED
-        k = k.reshape(vec![seq, self.n_kv_heads * head_dim_k])?; // CHANGED
-        let attn_out = grouped_query_attention_causal_with_offset( // CHANGED
+        q = q.reshape(vec![seq, self.n_heads, head_dim_q])?;
+        k = k.reshape(vec![seq, self.n_kv_heads, head_dim_k])?;
+        rope_apply(&mut q, &self.rope_table, start_pos)?;
+        rope_apply(&mut k, &self.rope_table, start_pos)?;
+        q = q.reshape(vec![seq, self.n_heads * head_dim_q])?;
+        k = k.reshape(vec![seq, self.n_kv_heads * head_dim_k])?;
+        let attn_out = grouped_query_attention_causal_with_offset(
             &q, &k, &v, self.n_heads, self.n_kv_heads, start_pos,
         )?;
-        let projected = proj(&attn_out, &self.wo)?; // CHANGED
-        add_elementwise(x, &projected)              // CHANGED
+        let projected = proj(&attn_out, &self.wo)?;
+        add_elementwise(x, &projected)
+    }
+
+    fn attention_sublayer_cached(
+        &self,
+        x: &Tensor<f32>,
+        start_pos: usize,
+        cache: &mut KvCache,
+        layer: usize,
+    ) -> Result<Tensor<f32>> {
+        let seq = x.dims()[0];
+        let normed = rmsnorm(x, &self.attn_norm, self.rms_norm_eps)?;
+        let mut q = proj(&normed, &self.wq)?;
+        let mut k = proj(&normed, &self.wk)?;
+        let v = proj(&normed, &self.wv)?;
+        let head_dim_q = q.dims()[1] / self.n_heads;
+        let head_dim_k = k.dims()[1] / self.n_kv_heads;
+        q = q.reshape(vec![seq, self.n_heads, head_dim_q])?;
+        k = k.reshape(vec![seq, self.n_kv_heads, head_dim_k])?;
+        rope_apply(&mut q, &self.rope_table, start_pos)?;
+        rope_apply(&mut k, &self.rope_table, start_pos)?;
+        q = q.reshape(vec![seq, self.n_heads * head_dim_q])?;
+        k = k.reshape(vec![seq, self.n_kv_heads * head_dim_k])?;
+        let attn_out = cached_attention_prefill(
+            cache, layer, start_pos, &q, &k, &v, self.n_heads, self.n_kv_heads,
+        )?;
+        let projected = proj(&attn_out, &self.wo)?;
+        add_elementwise(x, &projected)
     }
 
     fn ffn_sublayer(&self, x: &Tensor<f32>) -> Result<Tensor<f32>> {
-        let normed = rmsnorm(x, &self.ffn_norm, self.rms_norm_eps)?; // CHANGED
-        let gate = proj(&normed, &self.wgate)?; // CHANGED
-        let up   = proj(&normed, &self.wup)?;   // CHANGED
-        let hidden = swiglu(&gate, &up)?;        // CHANGED
-        let ffn_out = proj(&hidden, &self.wdown)?; // CHANGED
-        add_elementwise(x, &ffn_out)               // CHANGED
+        let normed = rmsnorm(x, &self.ffn_norm, self.rms_norm_eps)?;
+        let gate = proj(&normed, &self.wgate)?;
+        let up   = proj(&normed, &self.wup)?;
+        let hidden = swiglu(&gate, &up)?;
+        let ffn_out = proj(&hidden, &self.wdown)?;
+        add_elementwise(x, &ffn_out)
     }
 }
 
 // ── private helpers ──────────────────────────────────────────────────────────
 
 /// Linear projection: `input @ weight.T` (GGUF stores weights as [out, in]).
-fn proj(input: &Tensor<f32>, weight: &Tensor<f32>) -> Result<Tensor<f32>> { // CHANGED
+fn proj(input: &Tensor<f32>, weight: &Tensor<f32>) -> Result<Tensor<f32>> {
     let wt = weight.transpose(0, 1)?.contiguous();
     Ok(matmul_blocked(input, &wt)?)
 }
 
 /// Element-wise addition — both tensors must have identical shapes.
-fn add_elementwise(a: &Tensor<f32>, b: &Tensor<f32>) -> Result<Tensor<f32>> { // CHANGED
+fn add_elementwise(a: &Tensor<f32>, b: &Tensor<f32>) -> Result<Tensor<f32>> {
     if a.dims() != b.dims() {
         return Err(ModelError::TensorError(
             crate::tensor::TensorError::ShapeMismatch {
@@ -145,7 +200,7 @@ fn add_elementwise(a: &Tensor<f32>, b: &Tensor<f32>) -> Result<Tensor<f32>> { //
     } else {
         std::borrow::Cow::Owned(b.contiguous().as_slice().to_vec())
     };
-    let result: Vec<f32> = a_data.iter().zip(b_data.iter()).map(|(x, y)| x + y).collect(); // CHANGED
+    let result: Vec<f32> = a_data.iter().zip(b_data.iter()).map(|(x, y)| x + y).collect();
     Ok(Tensor::from_vec(result, a.shape().clone())?)
 }
 
@@ -160,22 +215,22 @@ mod tests {
         let q_dim  = n_heads * head_dim;
         let kv_dim = n_kv_heads * head_dim;
         TransformerBlock::new(
-            Tensor::zeros(vec![q_dim, embed]),   // wq
-            Tensor::zeros(vec![kv_dim, embed]),  // wk
-            Tensor::zeros(vec![kv_dim, embed]),  // wv
-            Tensor::zeros(vec![embed, q_dim]),   // wo
-            Tensor::ones(vec![embed]),            // attn_norm
-            Tensor::zeros(vec![ffn_dim, embed]), // wgate
-            Tensor::zeros(vec![ffn_dim, embed]), // wup
-            Tensor::zeros(vec![embed, ffn_dim]), // wdown
-            Tensor::ones(vec![embed]),            // ffn_norm
+            Tensor::zeros(vec![q_dim, embed]),
+            Tensor::zeros(vec![kv_dim, embed]),
+            Tensor::zeros(vec![kv_dim, embed]),
+            Tensor::zeros(vec![embed, q_dim]),
+            Tensor::ones(vec![embed]),
+            Tensor::zeros(vec![ffn_dim, embed]),
+            Tensor::zeros(vec![ffn_dim, embed]),
+            Tensor::zeros(vec![embed, ffn_dim]),
+            Tensor::ones(vec![embed]),
             RopeTable::new(512, head_dim, 10_000.0),
             n_heads, n_kv_heads, 1e-5,
         )
     }
 
     #[test]
-    fn test_block_output_shape_matches_input() { // CHANGED
+    fn test_block_output_shape_matches_input() {
         let block = make_block(8, 2, 2, 16);
         let x = Tensor::from_vec((0..16).map(|i| i as f32).collect(), vec![2, 8]).unwrap();
         let out = block.forward(&x, 0).unwrap();
@@ -183,14 +238,14 @@ mod tests {
     }
 
     #[test]
-    fn test_block_single_token_shape() { // CHANGED
+    fn test_block_single_token_shape() {
         let block = make_block(8, 2, 2, 16);
         let x = Tensor::from_vec(vec![0.1_f32; 8], vec![1, 8]).unwrap();
         assert_eq!(block.forward(&x, 0).unwrap().dims(), &[1, 8]);
     }
 
     #[test]
-    fn test_block_zero_weights_preserves_input() { // CHANGED
+    fn test_block_zero_weights_preserves_input() {
         let embed = 8_usize;
         let block = make_block(embed, 2, 2, 16);
         let data: Vec<f32> = (0..embed).map(|i| (i + 1) as f32 * 0.1).collect();
@@ -202,7 +257,7 @@ mod tests {
     }
 
     #[test]
-    fn test_block_no_nan_or_inf() { // CHANGED
+    fn test_block_no_nan_or_inf() {
         let block = make_block(8, 2, 2, 16);
         let x = Tensor::from_vec(vec![1.0,-1.0,0.5,-0.5,2.0,-2.0,0.1,-0.1], vec![1,8]).unwrap();
         let out = block.forward(&x, 0).unwrap();
@@ -213,25 +268,80 @@ mod tests {
     }
 
     #[test]
-    fn test_block_gqa_2_kv_heads() { // CHANGED
+    fn test_block_gqa_2_kv_heads() {
         let block = make_block(8, 4, 2, 16);
         let x = Tensor::from_vec(vec![0.5_f32; 8], vec![1, 8]).unwrap();
         assert_eq!(block.forward(&x, 0).unwrap().dims(), &[1, 8]);
     }
 
     #[test]
-    fn test_block_mqa_1_kv_head() { // CHANGED
+    fn test_block_mqa_1_kv_head() {
         let block = make_block(8, 2, 1, 16);
         let x = Tensor::from_vec(vec![1.0_f32; 8], vec![1, 8]).unwrap();
         assert_eq!(block.forward(&x, 0).unwrap().dims(), &[1, 8]);
     }
 
     #[test]
-    fn test_block_prefill_start_pos_zero_only() { // CHANGED
+    fn test_block_prefill_start_pos_zero_only() {
         let block = make_block(8, 2, 2, 16);
         let x = Tensor::from_vec((0..48).map(|i| i as f32 * 0.01).collect(), vec![6, 8]).unwrap();
         let out = block.forward(&x, 0).unwrap();
         assert_eq!(out.dims(), &[6, 8]);
         for &v in out.as_slice() { assert!(!v.is_nan()); }
+    }
+
+    // ── forward_cached: shape and no-nan ────────────────────────────────
+
+    #[test]
+    fn test_forward_cached_output_shape() {
+        let embed = 8_usize;
+        let n_heads = 2_usize;
+        let n_kv_heads = 2_usize;
+        let head_dim = embed / n_heads;
+        let block = make_block(embed, n_heads, n_kv_heads, 16);
+        let mut cache = KvCache::new(1, 64, n_kv_heads, head_dim);
+        let x = Tensor::from_vec(vec![0.5_f32; 3 * embed], vec![3, embed]).unwrap();
+        let out = block.forward_cached(&x, 0, &mut cache, 0).unwrap();
+        assert_eq!(out.dims(), &[3, embed]);
+    }
+
+    #[test]
+    fn test_forward_cached_no_nan() {
+        let embed = 8_usize;
+        let n_heads = 2_usize;
+        let n_kv_heads = 2_usize;
+        let head_dim = embed / n_heads;
+        let block = make_block(embed, n_heads, n_kv_heads, 16);
+        let mut cache = KvCache::new(1, 64, n_kv_heads, head_dim);
+        let x = Tensor::from_vec(
+            (0..2*embed).map(|i| i as f32 * 0.1).collect(), vec![2, embed]
+        ).unwrap();
+        let out = block.forward_cached(&x, 0, &mut cache, 0).unwrap();
+        for &v in out.as_slice() {
+            assert!(!v.is_nan() && !v.is_infinite(), "non-finite in cached output");
+        }
+    }
+
+    // forward and forward_cached should agree for zero-weight blocks:
+    // both paths add projected (=zero) back to x, so result is x unchanged.
+    #[test]
+    fn test_forward_cached_matches_forward_zero_weights() {
+        let embed = 8_usize;
+        let n_heads = 2_usize;
+        let n_kv_heads = 2_usize;
+        let head_dim = embed / n_heads;
+        let block = make_block(embed, n_heads, n_kv_heads, 16);
+
+        let data: Vec<f32> = (0..embed).map(|i| i as f32 * 0.1).collect();
+        let x = Tensor::from_vec(data.clone(), vec![1, embed]).unwrap();
+
+        let out_plain = block.forward(&x, 0).unwrap();
+
+        let mut cache = KvCache::new(1, 64, n_kv_heads, head_dim);
+        let out_cached = block.forward_cached(&x, 0, &mut cache, 0).unwrap();
+
+        for (i, (&a, &b)) in out_plain.as_slice().iter().zip(out_cached.as_slice()).enumerate() {
+            assert!((a - b).abs() < 1e-5, "mismatch at {i}: plain={a} cached={b}");
+        }
     }
 }

@@ -10,8 +10,12 @@ pub mod block;
 // CHANGED: commit 8.2 — full model forward pass
 pub mod forward;
 
+// CHANGED: commit 11.2 — chunked prefill
+pub mod prefill;
+
 // Re-exports for convenience
 pub use config::LlamaConfig;
 pub use weights::{GlobalWeightRole, WeightRole, global_weight_name, weight_name};
 pub use block::TransformerBlock;
-pub use forward::LlamaModel; // CHANGED: commit 8.2
+pub use forward::LlamaModel;
+pub use prefill::ChunkedPrefill;
