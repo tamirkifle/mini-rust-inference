@@ -30,6 +30,7 @@
 
 use crate::gguf::{GgufLoader, TensorExtractor};
 use crate::model::{Result, ModelError};
+use crate::cache::KvCache;
 use crate::model::llama::{
     LlamaConfig, TransformerBlock,
     weights::{WeightRole, GlobalWeightRole, weight_name, global_weight_name},
@@ -184,9 +185,51 @@ impl LlamaModel {
         let logits = matmul_blocked(&x, &output_t)?;              // CHANGED
         Ok(logits)
     }
-}
 
-// ── private helpers ───────────────────────────────────────────────────────────
+    /// Decode a single new token at absolute position `pos` using the KV-cache.
+    ///
+    /// Faster than `forward` for incremental generation: processes exactly one
+    /// token and reuses all prior K/V projections from `cache`.
+    ///
+    /// # Arguments
+    ///
+    /// * `token` – ID of the token to decode.  Must be `< vocab_size`.
+    /// * `pos`   – absolute sequence position of this token in the cache.
+    ///             Must equal the number of tokens already written (0-based).
+    /// * `cache` – shared KV-cache (will be written at `pos` for every layer).
+    ///
+    /// # Returns
+    ///
+    /// Logits vector `[vocab_size]` for the new token position.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelError`] on out-of-range token ID, cache overflow, or
+    /// any tensor shape failure.
+    pub fn forward_decode(
+        &self,
+        token: u32,
+        pos:   usize,
+        cache: &mut KvCache,
+    ) -> Result<Vec<f32>> {
+        // 1. Embed the single token → [1, embed_dim]
+        let mut x = self.embed_tokens(&[token])?;
+
+        // 2. Pass through every transformer block (decode path)
+        for (layer_idx, block) in self.blocks.iter().enumerate() {
+            x = block.forward_decode(&x, pos, cache, layer_idx)?;
+        }
+
+        // 3. Final RMSNorm
+        x = rmsnorm(&x, &self.output_norm, self.config.rms_norm_eps)?;
+
+        // 4. Unembedding: x @ output.T → [1, vocab_size]
+        let output_t = self.output.transpose(0, 1)?.contiguous();
+        let logits   = matmul_blocked(&x, &output_t)?;
+
+        Ok(logits.as_slice().to_vec())
+    }
+}
 
 /// Gather token embedding rows: `[vocab, embed] → [seq, embed]`.
 fn embed(token_embd: &Tensor<f32>, tokens: &[u32]) -> Result<Tensor<f32>> { // CHANGED
@@ -212,6 +255,7 @@ fn embed(token_embd: &Tensor<f32>, tokens: &[u32]) -> Result<Tensor<f32>> { // C
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cache::KvCache;
     use crate::model::llama::{config::LlamaConfig, block::TransformerBlock};
     use crate::ops::rope::RopeTable;
     use crate::gguf::MetadataValue;
@@ -335,5 +379,57 @@ mod tests {
         let model = make_model(&cfg);
         assert_eq!(model.config().block_count, 2);
         assert_eq!(model.config().vocab_size, 32);
+    }
+
+    // ── forward_decode ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_forward_decode_output_length() {
+        let cfg   = tiny_config();
+        let vocab = cfg.vocab_size as usize;
+        let model = make_model(&cfg);
+        let n_layers   = cfg.block_count as usize;
+        let n_kv_heads = cfg.n_kv_heads as usize;
+        let head_dim   = cfg.head_dim() as usize;
+        let mut cache  = KvCache::new(n_layers, cfg.context_length as usize, n_kv_heads, head_dim);
+        let logits = model.forward_decode(0, 0, &mut cache).unwrap();
+        assert_eq!(logits.len(), vocab);
+    }
+
+    #[test]
+    fn test_forward_decode_no_nan() {
+        let cfg   = tiny_config();
+        let model = make_model(&cfg);
+        let n_layers   = cfg.block_count as usize;
+        let n_kv_heads = cfg.n_kv_heads as usize;
+        let head_dim   = cfg.head_dim() as usize;
+        let mut cache  = KvCache::new(n_layers, cfg.context_length as usize, n_kv_heads, head_dim);
+        let logits = model.forward_decode(5, 0, &mut cache).unwrap();
+        for (i, &v) in logits.iter().enumerate() {
+            assert!(!v.is_nan(),      "NaN in decode logits[{i}]");
+            assert!(!v.is_infinite(), "Inf in decode logits[{i}]");
+        }
+    }
+
+    /// At pos=0 with a fresh cache, `forward_decode` must produce the same
+    /// logits as the first (and only) row of `forward(&[token])`.
+    #[test]
+    fn test_forward_decode_matches_forward_single_token() {
+        let cfg   = tiny_config();
+        let vocab = cfg.vocab_size as usize;
+        let model = make_model(&cfg);
+        let n_layers   = cfg.block_count as usize;
+        let n_kv_heads = cfg.n_kv_heads as usize;
+        let head_dim   = cfg.head_dim() as usize;
+
+        let logits_full = model.forward(&[5]).unwrap();
+        let mut cache   = KvCache::new(n_layers, cfg.context_length as usize, n_kv_heads, head_dim);
+        let logits_dec  = model.forward_decode(5, 0, &mut cache).unwrap();
+
+        assert_eq!(logits_dec.len(), vocab);
+        for (i, (&d, &f)) in logits_dec.iter().zip(logits_full.as_slice()).enumerate() {
+            assert!((d - f).abs() < 1e-4,
+                "logit[{i}]: decode={d} forward={f}");
+        }
     }
 }

@@ -63,6 +63,10 @@ pub mod cache;
 // CHANGED: memory subsystem activated in commit 10.1
 pub mod memory;
 
+// CHANGED: session API and config — commit 12.1
+pub mod config;
+pub mod session;
+
 // Future modules
 // pub mod quant;
 // pub mod simd;

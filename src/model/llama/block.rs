@@ -35,7 +35,7 @@ use crate::ops::{
     activation::swiglu,
     rope::{RopeTable, rope_apply},
 };
-use crate::attention::cached::cached_attention_prefill;
+use crate::attention::cached::{cached_attention_decode, cached_attention_prefill};
 use crate::attention::gqa::grouped_query_attention_causal_with_offset;
 use crate::tensor::Tensor;
 
@@ -114,6 +114,33 @@ impl TransformerBlock {
         Ok(x)
     }
 
+    /// Decode a single new token at absolute position `pos`, writing K/V to the cache.
+    ///
+    /// Identical to [`forward_cached`] but uses [`cached_attention_decode`] instead of
+    /// the prefill path so that only one K/V row is written per call.
+    ///
+    /// # Arguments
+    ///
+    /// * `x`     – `[1, embed_dim]`
+    /// * `pos`   – absolute cache position for this token
+    /// * `cache` – mutable KV-cache; writes K/V at `pos` for `layer`
+    /// * `layer` – which layer slot in the cache to write
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelError`] if any tensor operation or cache write fails.
+    pub fn forward_decode(
+        &self,
+        x:     &Tensor<f32>,
+        pos:   usize,
+        cache: &mut KvCache,
+        layer: usize,
+    ) -> Result<Tensor<f32>> {
+        let x = self.attention_sublayer_decode(x, pos, cache, layer)?;
+        let x = self.ffn_sublayer(&x)?;
+        Ok(x)
+    }
+
     fn attention_sublayer(&self, x: &Tensor<f32>, start_pos: usize) -> Result<Tensor<f32>> {
         let seq = x.dims()[0];
         let normed = rmsnorm(x, &self.attn_norm, self.rms_norm_eps)?;
@@ -162,8 +189,34 @@ impl TransformerBlock {
         add_elementwise(x, &projected)
     }
 
+    fn attention_sublayer_decode(
+        &self,
+        x:     &Tensor<f32>,
+        pos:   usize,
+        cache: &mut KvCache,
+        layer: usize,
+    ) -> Result<Tensor<f32>> {
+        let normed = rmsnorm(x, &self.attn_norm, self.rms_norm_eps)?;
+        let mut q = proj(&normed, &self.wq)?;
+        let mut k = proj(&normed, &self.wk)?;
+        let v     = proj(&normed, &self.wv)?;
+        let head_dim_q = q.dims()[1] / self.n_heads;
+        let head_dim_k = k.dims()[1] / self.n_kv_heads;
+        q = q.reshape(vec![1, self.n_heads,    head_dim_q])?;
+        k = k.reshape(vec![1, self.n_kv_heads, head_dim_k])?;
+        rope_apply(&mut q, &self.rope_table, pos)?;
+        rope_apply(&mut k, &self.rope_table, pos)?;
+        q = q.reshape(vec![1, self.n_heads    * head_dim_q])?;
+        k = k.reshape(vec![1, self.n_kv_heads * head_dim_k])?;
+        let attn_out = cached_attention_decode(
+            cache, layer, pos, &q, &k, &v, self.n_heads, self.n_kv_heads,
+        )?;
+        let projected = proj(&attn_out, &self.wo)?;
+        add_elementwise(x, &projected)
+    }
+
     fn ffn_sublayer(&self, x: &Tensor<f32>) -> Result<Tensor<f32>> {
-        let normed = rmsnorm(x, &self.ffn_norm, self.rms_norm_eps)?;
+        let normed  = rmsnorm(x, &self.ffn_norm, self.rms_norm_eps)?;
         let gate = proj(&normed, &self.wgate)?;
         let up   = proj(&normed, &self.wup)?;
         let hidden = swiglu(&gate, &up)?;
@@ -342,6 +395,61 @@ mod tests {
 
         for (i, (&a, &b)) in out_plain.as_slice().iter().zip(out_cached.as_slice()).enumerate() {
             assert!((a - b).abs() < 1e-5, "mismatch at {i}: plain={a} cached={b}");
+        }
+    }
+
+    // ── forward_decode tests ─────────────────────────────────────────────
+
+    #[test]
+    fn test_forward_decode_output_shape() {
+        let embed      = 8_usize;
+        let n_heads    = 2_usize;
+        let n_kv_heads = 2_usize;
+        let head_dim   = embed / n_heads;
+        let block      = make_block(embed, n_heads, n_kv_heads, 16);
+        let mut cache  = KvCache::new(1, 64, n_kv_heads, head_dim);
+        let x = Tensor::from_vec(vec![0.3_f32; embed], vec![1, embed]).unwrap();
+        let out = block.forward_decode(&x, 0, &mut cache, 0).unwrap();
+        assert_eq!(out.dims(), &[1, embed]);
+    }
+
+    #[test]
+    fn test_forward_decode_no_nan() {
+        let embed      = 8_usize;
+        let n_heads    = 2_usize;
+        let n_kv_heads = 2_usize;
+        let head_dim   = embed / n_heads;
+        let block      = make_block(embed, n_heads, n_kv_heads, 16);
+        let mut cache  = KvCache::new(1, 64, n_kv_heads, head_dim);
+        let x = Tensor::from_vec(
+            (0..embed).map(|i| i as f32 * 0.1).collect(), vec![1, embed],
+        ).unwrap();
+        let out = block.forward_decode(&x, 0, &mut cache, 0).unwrap();
+        for &v in out.as_slice() {
+            assert!(!v.is_nan() && !v.is_infinite(), "non-finite in decode output");
+        }
+    }
+
+    /// For zero-weight blocks the decode path at pos=0 must match the plain
+    /// forward pass: both add zero projections to x, leaving x unchanged.
+    #[test]
+    fn test_forward_decode_matches_forward_zero_weights() {
+        let embed      = 8_usize;
+        let n_heads    = 2_usize;
+        let n_kv_heads = 2_usize;
+        let head_dim   = embed / n_heads;
+        let block      = make_block(embed, n_heads, n_kv_heads, 16);
+
+        let data: Vec<f32> = (0..embed).map(|i| (i + 1) as f32 * 0.05).collect();
+        let x = Tensor::from_vec(data.clone(), vec![1, embed]).unwrap();
+
+        let out_plain = block.forward(&x, 0).unwrap();
+
+        let mut cache = KvCache::new(1, 64, n_kv_heads, head_dim);
+        let out_decode = block.forward_decode(&x, 0, &mut cache, 0).unwrap();
+
+        for (i, (&a, &b)) in out_plain.as_slice().iter().zip(out_decode.as_slice()).enumerate() {
+            assert!((a - b).abs() < 1e-5, "decode mismatch at {i}: forward={a} decode={b}");
         }
     }
 }
