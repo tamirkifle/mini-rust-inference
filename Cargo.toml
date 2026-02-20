@@ -19,6 +19,7 @@ path = "src/bin/main.rs"
 
 [dependencies]
 memmap2 = "0.9"
+rayon   = "1.10"
 
 [dev-dependencies]
 tempfile = "3.10"

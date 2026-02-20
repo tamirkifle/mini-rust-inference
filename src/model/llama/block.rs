@@ -31,6 +31,7 @@ use crate::cache::KvCache;
 use crate::model::{ModelError, Result};
 use crate::ops::{
     matmul::matmul_blocked,
+    matmul::matmul_parallel,
     norm::rmsnorm,
     activation::swiglu,
     rope::{RopeTable, rope_apply},
@@ -111,6 +112,32 @@ impl TransformerBlock {
     ) -> Result<Tensor<f32>> {
         let x = self.attention_sublayer_cached(x, start_pos, cache, layer)?;
         let x = self.ffn_sublayer(&x)?;
+        Ok(x)
+    }
+
+    /// Parallel cached forward pass: same as [`forward_cached`] but uses
+    /// [`matmul_parallel`] for all six projection matmuls inside attention
+    /// and FFN.  Beneficial for chunks larger than ~8 tokens on multi-core hardware.
+    ///
+    /// # Arguments
+    ///
+    /// * `x`         – `[seq_len, embed_dim]`
+    /// * `start_pos` – absolute position of the first token
+    /// * `cache`     – mutable KV-cache; written at `[start_pos .. start_pos + seq_len)`
+    /// * `layer`     – which layer slot in the cache to write
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelError`] if any tensor operation or cache write fails.
+    pub fn forward_cached_parallel(
+        &self,
+        x:         &Tensor<f32>,
+        start_pos: usize,
+        cache:     &mut KvCache,
+        layer:     usize,
+    ) -> Result<Tensor<f32>> {
+        let x = self.attention_sublayer_cached_parallel(x, start_pos, cache, layer)?;
+        let x = self.ffn_sublayer_parallel(&x)?;
         Ok(x)
     }
 
@@ -215,6 +242,42 @@ impl TransformerBlock {
         add_elementwise(x, &projected)
     }
 
+    fn attention_sublayer_cached_parallel(
+        &self,
+        x:         &Tensor<f32>,
+        start_pos: usize,
+        cache:     &mut KvCache,
+        layer:     usize,
+    ) -> Result<Tensor<f32>> {
+        let seq = x.dims()[0];
+        let normed = rmsnorm(x, &self.attn_norm, self.rms_norm_eps)?;
+        let mut q = proj_par(&normed, &self.wq)?;
+        let mut k = proj_par(&normed, &self.wk)?;
+        let v     = proj_par(&normed, &self.wv)?;
+        let head_dim_q = q.dims()[1] / self.n_heads;
+        let head_dim_k = k.dims()[1] / self.n_kv_heads;
+        q = q.reshape(vec![seq, self.n_heads,    head_dim_q])?;
+        k = k.reshape(vec![seq, self.n_kv_heads, head_dim_k])?;
+        rope_apply(&mut q, &self.rope_table, start_pos)?;
+        rope_apply(&mut k, &self.rope_table, start_pos)?;
+        q = q.reshape(vec![seq, self.n_heads    * head_dim_q])?;
+        k = k.reshape(vec![seq, self.n_kv_heads * head_dim_k])?;
+        let attn_out = cached_attention_prefill(
+            cache, layer, start_pos, &q, &k, &v, self.n_heads, self.n_kv_heads,
+        )?;
+        let projected = proj_par(&attn_out, &self.wo)?;
+        add_elementwise(x, &projected)
+    }
+
+    fn ffn_sublayer_parallel(&self, x: &Tensor<f32>) -> Result<Tensor<f32>> {
+        let normed  = rmsnorm(x, &self.ffn_norm, self.rms_norm_eps)?;
+        let gate    = proj_par(&normed, &self.wgate)?;
+        let up      = proj_par(&normed, &self.wup)?;
+        let hidden  = swiglu(&gate, &up)?;
+        let ffn_out = proj_par(&hidden, &self.wdown)?;
+        add_elementwise(x, &ffn_out)
+    }
+
     fn ffn_sublayer(&self, x: &Tensor<f32>) -> Result<Tensor<f32>> {
         let normed  = rmsnorm(x, &self.ffn_norm, self.rms_norm_eps)?;
         let gate = proj(&normed, &self.wgate)?;
@@ -231,6 +294,12 @@ impl TransformerBlock {
 fn proj(input: &Tensor<f32>, weight: &Tensor<f32>) -> Result<Tensor<f32>> {
     let wt = weight.transpose(0, 1)?.contiguous();
     Ok(matmul_blocked(input, &wt)?)
+}
+
+/// Parallel linear projection using `matmul_parallel` (rayon row-parallel).
+fn proj_par(input: &Tensor<f32>, weight: &Tensor<f32>) -> Result<Tensor<f32>> {
+    let wt = weight.transpose(0, 1)?.contiguous();
+    Ok(matmul_parallel(input, &wt)?)
 }
 
 /// Element-wise addition — both tensors must have identical shapes.
@@ -450,6 +519,62 @@ mod tests {
 
         for (i, (&a, &b)) in out_plain.as_slice().iter().zip(out_decode.as_slice()).enumerate() {
             assert!((a - b).abs() < 1e-5, "decode mismatch at {i}: forward={a} decode={b}");
+        }
+    }
+
+    // ── forward_cached_parallel tests ─────────────────────────────────────
+
+    #[test]
+    fn test_forward_cached_parallel_output_shape() {
+        let embed      = 8_usize;
+        let n_heads    = 2_usize;
+        let n_kv_heads = 2_usize;
+        let head_dim   = embed / n_heads;
+        let block      = make_block(embed, n_heads, n_kv_heads, 16);
+        let mut cache  = KvCache::new(1, 64, n_kv_heads, head_dim);
+        let x   = Tensor::from_vec(vec![0.5_f32; 4 * embed], vec![4, embed]).unwrap();
+        let out = block.forward_cached_parallel(&x, 0, &mut cache, 0).unwrap();
+        assert_eq!(out.dims(), &[4, embed]);
+    }
+
+    #[test]
+    fn test_forward_cached_parallel_no_nan() {
+        let embed      = 8_usize;
+        let n_heads    = 2_usize;
+        let n_kv_heads = 2_usize;
+        let head_dim   = embed / n_heads;
+        let block      = make_block(embed, n_heads, n_kv_heads, 16);
+        let mut cache  = KvCache::new(1, 64, n_kv_heads, head_dim);
+        let x = Tensor::from_vec(
+            (0..3 * embed).map(|i| i as f32 * 0.1).collect(), vec![3, embed],
+        ).unwrap();
+        let out = block.forward_cached_parallel(&x, 0, &mut cache, 0).unwrap();
+        for &v in out.as_slice() {
+            assert!(!v.is_nan() && !v.is_infinite());
+        }
+    }
+
+    /// For zero-weight blocks, parallel and sequential paths must agree.
+    #[test]
+    fn test_forward_cached_parallel_matches_sequential() {
+        let embed      = 8_usize;
+        let n_heads    = 2_usize;
+        let n_kv_heads = 2_usize;
+        let head_dim   = embed / n_heads;
+        let block      = make_block(embed, n_heads, n_kv_heads, 16);
+
+        let data: Vec<f32> = (0..4 * embed).map(|i| i as f32 * 0.05).collect();
+        let x = Tensor::from_vec(data.clone(), vec![4, embed]).unwrap();
+
+        let mut cache_seq = KvCache::new(1, 64, n_kv_heads, head_dim);
+        let out_seq = block.forward_cached(&x, 0, &mut cache_seq, 0).unwrap();
+
+        let mut cache_par = KvCache::new(1, 64, n_kv_heads, head_dim);
+        let out_par = block.forward_cached_parallel(&x, 0, &mut cache_par, 0).unwrap();
+
+        for (i, (&s, &p)) in out_seq.as_slice().iter().zip(out_par.as_slice()).enumerate() {
+            assert!((s - p).abs() < 1e-4,
+                "mismatch at [{i}]: seq={s} par={p}");
         }
     }
 }

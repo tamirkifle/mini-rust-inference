@@ -13,9 +13,13 @@ pub mod forward;
 // CHANGED: commit 11.2 — chunked prefill
 pub mod prefill;
 
+// CHANGED: commit 12.2 — parallel chunked prefill (rayon matmul)
+pub mod parallel_prefill;
+
 // Re-exports for convenience
 pub use config::LlamaConfig;
 pub use weights::{GlobalWeightRole, WeightRole, global_weight_name, weight_name};
 pub use block::TransformerBlock;
 pub use forward::LlamaModel;
 pub use prefill::ChunkedPrefill;
+pub use parallel_prefill::ParallelPrefill;

@@ -10,8 +10,9 @@
 //! All implementations must match `matmul_naive` within `1e-5` absolute error.
 
 pub mod naive;
-pub mod blocked; // CHANGED: commit 5.2
+pub mod blocked;
+pub mod parallel; // commit 12.2 — row-parallel GEMM via rayon
 
-// CHANGED: re-export both kernels at this level
 pub use naive::matmul_naive;
 pub use blocked::{matmul_blocked, matmul_blocked_with_block_size, DEFAULT_BLOCK_SIZE};
+pub use parallel::matmul_parallel;
