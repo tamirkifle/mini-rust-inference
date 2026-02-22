@@ -14,6 +14,7 @@ pub mod mask;      // commit 7.2
 pub mod multihead; // commit 7.3
 pub mod gqa;       // CHANGED: commit 7.4
 pub mod cached;    // CHANGED: commit 9.2
+pub mod sliding;   // commit 12.3 — sliding window attention
 
 // CHANGED: flat re-exports for common entry-points
 pub use sdpa::scaled_dot_product_attention;
@@ -30,3 +31,4 @@ pub use gqa::{                                                                 /
     grouped_query_attention_causal_with_offset,
 };
 pub use cached::{cached_attention_prefill, cached_attention_decode};           // CHANGED: commit 9.2
+pub use sliding::{sliding_window_mask, sliding_window_sdpa, sliding_window_gqa}; // commit 12.3
