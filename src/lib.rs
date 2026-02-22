@@ -67,8 +67,10 @@ pub mod memory;
 pub mod config;
 pub mod session;
 
+// CHANGED: quant module activated in commit 13.2
+pub mod quant;
+
 // Future modules
-// pub mod quant;
 // pub mod simd;
 
 /// Library version
