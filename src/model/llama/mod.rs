@@ -16,10 +16,14 @@ pub mod prefill;
 // CHANGED: commit 12.2 — parallel chunked prefill (rayon matmul)
 pub mod parallel_prefill;
 
+// CHANGED: commit 14.1 — mixed-precision forward pass (INT8 weights, f32 activations)
+pub mod forward_int8;
+
 // Re-exports for convenience
 pub use config::LlamaConfig;
 pub use weights::{GlobalWeightRole, WeightRole, global_weight_name, weight_name};
 pub use block::TransformerBlock;
 pub use forward::LlamaModel;
+pub use forward_int8::{LlamaModelInt8, TransformerBlockInt8};
 pub use prefill::ChunkedPrefill;
 pub use parallel_prefill::ParallelPrefill;
