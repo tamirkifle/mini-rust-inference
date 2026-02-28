@@ -20,6 +20,7 @@ pub mod parallel; // commit 12.2 — row-parallel GEMM via rayon
 pub mod q4_0;    // commit 13.1 — Q4_0 dequantised matmul
 pub mod int8;    // commit 13.4 — INT8×INT8→INT32→f32
 pub mod q8_direct; // commit 14.2 — direct Q8_0 inference (zero weight dequant)
+pub mod avx2;      // commit 15.2 — AVX2 f32 GEMM kernel
 
 pub use naive::matmul_naive;
 pub use blocked::{matmul_blocked, matmul_blocked_with_block_size, DEFAULT_BLOCK_SIZE};
@@ -27,3 +28,4 @@ pub use parallel::matmul_parallel;
 pub use q4_0::matmul_q4_0_dequant;
 pub use int8::{matmul_int8, matmul_int8_from_f32};
 pub use q8_direct::{matmul_q8_0_direct, Q8_0WeightMatrix};
+pub use avx2::matmul_avx2;
