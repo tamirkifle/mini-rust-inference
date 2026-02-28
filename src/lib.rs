@@ -70,8 +70,8 @@ pub mod session;
 // CHANGED: quant module activated in commit 13.2
 pub mod quant;
 
-// Future modules
-// pub mod simd;
+// CHANGED: simd primitives activated — commit 15.1
+pub mod simd;
 
 /// Library version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
