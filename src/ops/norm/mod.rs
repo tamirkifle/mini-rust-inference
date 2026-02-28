@@ -4,7 +4,8 @@
 //! |-------------|---------------------------  |------------|
 //! | `rmsnorm`   | Root Mean Square LayerNorm  | ✅ commit 6.1 |
 
-pub mod rmsnorm; // CHANGED: commit 6.1
+pub mod rmsnorm;       // commit 6.1
+pub mod rmsnorm_simd;  // commit 15.3 — SIMD-accelerated RMSNorm
 
-// CHANGED: flat re-exports for the most common entry-points
 pub use rmsnorm::{rmsnorm, rmsnorm_inplace, DEFAULT_EPS};
+pub use rmsnorm_simd::{rmsnorm_simd, rmsnorm_simd_inplace};

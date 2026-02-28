@@ -20,12 +20,14 @@ pub mod activation;   // commit 6.2
 pub mod rope;         // commit 6.3
 pub mod rope_scaled;  // commit 11.1
 pub mod softmax;      // commit 6.4
+pub mod softmax_simd; // commit 15.3 — SIMD-accelerated softmax
 
 pub use matmul::{matmul_naive, matmul_blocked, matmul_blocked_with_block_size};
 pub use matvec::{matvec, matvec_2d};
 pub use fusion::{matmul_fused, FusedOp, BiasAdd, Activation, ActivationFn, Chain};
-pub use norm::{rmsnorm, rmsnorm_inplace, DEFAULT_EPS};
+pub use norm::{rmsnorm, rmsnorm_inplace, DEFAULT_EPS, rmsnorm_simd, rmsnorm_simd_inplace};
 pub use activation::{silu, silu_inplace, silu_scalar, swiglu, swiglu_inplace};
 pub use rope::{RopeTable, rope_apply, rope_apply_copy};
 pub use rope_scaled::{RopeScaling, ScaledRopeTable, rope_apply_scaled, rope_apply_scaled_copy};
 pub use softmax::{softmax, softmax_dim, softmax_inplace};
+pub use softmax_simd::{softmax_simd, softmax_simd_dim, softmax_simd_inplace};
