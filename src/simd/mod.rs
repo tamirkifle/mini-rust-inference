@@ -19,7 +19,8 @@
 //! | other        | Scalar     | Pure Rust fallback                            |
 
 #[allow(clippy::module_inception)]
-pub mod f32; // commit-15.1 — vectorized f32 primitives
-             // commit-15.4: pub mod dispatch;
+pub mod f32;      // commit-15.1 — vectorized f32 primitives
+pub mod dispatch; // commit-15.4 — runtime CPU detection + kernel selection
 
 pub use self::f32::{hsum, dot, add_into, mul_into, scale_into, fma_into};
+pub use dispatch::{CpuFeatures, Kernels, global_kernels};
