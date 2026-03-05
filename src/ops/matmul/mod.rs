@@ -6,7 +6,7 @@
 //! |---------------|---------------------------------------|--------|
 //! | `naive`       | Triple-nested ikj loop (reference)    | 5.1    |
 //! | `blocked`     | Cache-tiled GEMM (32×32 tiles)        | 5.2    |
-//! | `parallel`    | Row-parallel GEMM via rayon           | 12.2   |
+//! | `parallel`    | Row-parallel GEMM via rayon; INT8 parallel GEMM | 12.2, 16.3 |
 //! | `q4_0`        | Q4_0 lazy-dequant × f32 activations   | 13.1   |
 //! | `int8`        | INT8×INT8→INT32→f32 quantized GEMM    | 13.4   |
 //! | `q8_direct`   | Q8_0 direct (zero weight dequant)     | 14.2   |
@@ -29,7 +29,7 @@ pub mod int8_neon;   // commit 16.2 — NEON INT8 dot product kernel
 
 pub use naive::matmul_naive;
 pub use blocked::{matmul_blocked, matmul_blocked_with_block_size, DEFAULT_BLOCK_SIZE};
-pub use parallel::matmul_parallel;
+pub use parallel::{matmul_parallel, matmul_int8_parallel};
 pub use q4_0::matmul_q4_0_dequant;
 pub use int8::{matmul_int8, matmul_int8_from_f32};
 pub use q8_direct::{matmul_q8_0_direct, Q8_0WeightMatrix};

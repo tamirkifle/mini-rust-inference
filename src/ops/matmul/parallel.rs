@@ -201,3 +201,208 @@ mod tests {
         assert!(close_slice(par.as_slice(), seq.as_slice(), 1e-4));
     }
 }
+
+// ── INT8 parallel GEMM ────────────────────────────────────────────────────────
+
+use crate::quant::int8::per_channel::QuantizedMatrix;
+
+/// Platform-optimal INT8 dot product dispatcher.
+///
+/// Routes to NEON on aarch64, AVX2 on x86_64, scalar elsewhere.
+/// This lets `matmul_int8_parallel` get both SIMD throughput per thread
+/// and rayon parallelism across threads.
+#[inline(always)]
+fn dot_i8_simd(a: &[i8], b: &[i8]) -> i32 {
+    #[cfg(target_arch = "aarch64")]
+    { return super::int8_neon::dot_i8_neon(a, b); }
+    #[cfg(target_arch = "x86_64")]
+    { return super::int8_avx2::dot_i8_avx2(a, b); }
+    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
+    { a.iter().zip(b).map(|(&x, &y)| i32::from(x) * i32::from(y)).sum() }
+}
+
+/// Row-parallel INT8 × INT8 → INT32 → f32 GEMM.
+///
+/// Distributes the M input rows across rayon threads; each thread computes
+/// one output row using the platform-optimal SIMD dot product
+/// (`dot_i8_simd`).  This combines:
+///
+/// - **Inter-row parallelism** via rayon (commit 16.3)
+/// - **Intra-row SIMD** via AVX2 (commit 16.1) or NEON (commit 16.2)
+///
+/// # Arguments
+///
+/// * `act_q`     – flat `[M × K]` row-major INT8 activations
+/// * `act_scale` – per-tensor f32 scale used to quantize `act_q`
+/// * `weights`   – per-channel [`QuantizedMatrix`] of shape `[N, K]`
+/// * `m`         – number of activation rows (batch / sequence length)
+///
+/// # Returns
+///
+/// Contiguous `Tensor<f32>` of shape `[M, N]`.
+///
+/// # Errors
+///
+/// [`TensorError::InvalidShape`] if `act_q.len() != m * k`.
+///
+/// # Scalability note
+///
+/// For single-token decode (`M = 1`) there is only one output row, so rayon
+/// sees nothing to parallelise and adds only thread-pool overhead.  In that
+/// regime prefer [`crate::ops::matmul::matmul_int8_avx2`] /
+/// [`crate::ops::matmul::matmul_int8_neon`] directly.
+#[must_use = "returns a new tensor"]
+pub fn matmul_int8_parallel(
+    act_q: &[i8],
+    act_scale: f32,
+    weights: &QuantizedMatrix,
+    m: usize,
+) -> Result<Tensor<f32>> {
+    let n = weights.n_out;
+    let k = weights.k_in;
+
+    if act_q.len() != m * k {
+        return Err(TensorError::InvalidShape {
+            reason: format!(
+                "matmul_int8_parallel: act_q.len()={} != m*k={}*{}={}",
+                act_q.len(), m, k, m * k
+            ),
+        });
+    }
+
+    let mut out = vec![0.0_f32; m * n];
+
+    // par_chunks_mut(n): each rayon task owns one non-overlapping output row.
+    // Shared borrows of act_q and weights are Send because &[i8] and
+    // &QuantizedMatrix are Sync (all fields are plain data).
+    out.par_chunks_mut(n)
+        .enumerate()
+        .for_each(|(m_i, out_row)| {
+            let a_row = &act_q[m_i * k..(m_i + 1) * k];
+            for n_i in 0..n {
+                let w_row = weights.row(n_i);
+                let acc   = dot_i8_simd(a_row, w_row);
+                out_row[n_i] = acc as f32 * act_scale * weights.scales[n_i];
+            }
+        });
+
+    Tensor::from_vec(out, vec![m, n])
+}
+
+// ── tests: matmul_int8_parallel ───────────────────────────────────────────────
+
+#[cfg(test)]
+mod int8_parallel_tests {
+    use super::*;
+    use crate::ops::matmul::matmul_int8;
+    use crate::quant::int8::per_channel::quantize_per_channel;
+    use crate::quant::int8::symmetric::quantize_symmetric;
+
+    const REL_TOL: f32 = 1e-6; // parallel uses same arithmetic as scalar → bit-identical
+
+    fn max_rel_err(got: &[f32], expected: &[f32]) -> f32 {
+        got.iter().zip(expected).map(|(g, e)| {
+            let denom = g.abs().max(e.abs()).max(1e-3);
+            (g - e).abs() / denom
+        }).fold(0.0_f32, f32::max)
+    }
+
+    #[test]
+    fn output_shape() {
+        let w: Vec<f32> = (0..64).map(|i| i as f32 * 0.01).collect();
+        let qw = quantize_per_channel(&w, 2, 32);
+        let act: Vec<f32> = vec![0.5; 96];
+        let (act_q, act_scale) = quantize_symmetric(&act);
+        let out = matmul_int8_parallel(&act_q, act_scale, &qw, 3).unwrap();
+        assert_eq!(out.dims(), &[3, 2]);
+    }
+
+    #[test]
+    fn matches_scalar_small() {
+        let k = 64_usize;
+        let n_out = 4_usize;
+        let m = 4_usize;
+        let w: Vec<f32> = (0..n_out * k).map(|i| (i as f32) * 0.03 - 2.0).collect();
+        let inp: Vec<f32> = (0..m * k).map(|i| (i as f32) * 0.05 - 1.6).collect();
+        let qw = quantize_per_channel(&w, n_out, k);
+        let (act_q, act_scale) = quantize_symmetric(&inp);
+        let par    = matmul_int8_parallel(&act_q, act_scale, &qw, m).unwrap();
+        let scalar = matmul_int8(&act_q, act_scale, &qw, m).unwrap();
+        let mre = max_rel_err(par.as_slice(), scalar.as_slice());
+        assert!(mre < REL_TOL, "mre={mre:.2e}");
+    }
+
+    #[test]
+    fn matches_scalar_larger_k() {
+        let k = 256_usize;
+        let n_out = 8_usize;
+        let m = 16_usize;
+        let w: Vec<f32> = (0..n_out * k).map(|i| (i as f32) * 0.01 - 5.0).collect();
+        let inp: Vec<f32> = (0..m * k).map(|i| (i as f32) * 0.02 - 5.0).collect();
+        let qw = quantize_per_channel(&w, n_out, k);
+        let (act_q, act_scale) = quantize_symmetric(&inp);
+        let par    = matmul_int8_parallel(&act_q, act_scale, &qw, m).unwrap();
+        let scalar = matmul_int8(&act_q, act_scale, &qw, m).unwrap();
+        let mre = max_rel_err(par.as_slice(), scalar.as_slice());
+        assert!(mre < REL_TOL, "mre={mre:.2e}");
+    }
+
+    #[test]
+    fn single_row_matches() {
+        // M=1: no actual parallelism, but should still produce correct results.
+        let k = 128_usize;
+        let n_out = 6_usize;
+        let w: Vec<f32> = (0..n_out * k).map(|i| (i as f32) * 0.04 - 2.0).collect();
+        let inp: Vec<f32> = (0..k).map(|i| (i as f32) * 0.06 - 2.0).collect();
+        let qw = quantize_per_channel(&w, n_out, k);
+        let (act_q, act_scale) = quantize_symmetric(&inp);
+        let par    = matmul_int8_parallel(&act_q, act_scale, &qw, 1).unwrap();
+        let scalar = matmul_int8(&act_q, act_scale, &qw, 1).unwrap();
+        let mre = max_rel_err(par.as_slice(), scalar.as_slice());
+        assert!(mre < REL_TOL, "mre={mre:.2e}");
+    }
+
+    #[test]
+    fn zero_input_zero_output() {
+        let k = 64_usize;
+        let n_out = 4_usize;
+        let m = 3_usize;
+        let w: Vec<f32> = (0..n_out * k).map(|i| i as f32 * 0.1 - 6.0).collect();
+        let qw = quantize_per_channel(&w, n_out, k);
+        let act_q = vec![0_i8; m * k];
+        let out = matmul_int8_parallel(&act_q, 1.0, &qw, m).unwrap();
+        for &v in out.as_slice() {
+            assert!(v.abs() < 1e-6, "expected 0, got {v}");
+        }
+    }
+
+    #[test]
+    fn no_cross_row_contamination() {
+        // Rows of A are all-zeros except one non-zero row — only that row's
+        // output should be non-zero (verifies no data races between threads).
+        let k = 64_usize;
+        let n_out = 3_usize;
+        let m = 8_usize;
+        let w: Vec<f32> = (0..n_out * k).map(|i| (i % 7) as f32 * 0.1).collect();
+        let qw = quantize_per_channel(&w, n_out, k);
+        let mut inp = vec![0.0_f32; m * k];
+        // Only row 3 is non-zero.
+        for j in 0..k { inp[3 * k + j] = (j as f32) * 0.1 + 0.5; }
+        let (act_q, act_scale) = quantize_symmetric(&inp);
+        let par    = matmul_int8_parallel(&act_q, act_scale, &qw, m).unwrap();
+        let scalar = matmul_int8(&act_q, act_scale, &qw, m).unwrap();
+        let mre = max_rel_err(par.as_slice(), scalar.as_slice());
+        assert!(mre < REL_TOL, "mre={mre:.2e}");
+    }
+
+    #[test]
+    fn error_on_bad_act_q_length() {
+        let w = vec![0.0_f32; 64];
+        let qw = quantize_per_channel(&w, 2, 32);
+        let act_q = vec![0_i8; 10];
+        assert!(matches!(
+            matmul_int8_parallel(&act_q, 1.0, &qw, 1),
+            Err(TensorError::InvalidShape { .. })
+        ));
+    }
+}
