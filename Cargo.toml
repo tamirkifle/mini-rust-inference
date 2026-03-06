@@ -29,6 +29,10 @@ harness = false
 name = "inference"
 harness = false
 
+[[bench]]
+name = "compare_llamacpp"
+harness = false
+
 [dependencies]
 memmap2 = "0.9"
 rayon   = "1.10"
