@@ -25,6 +25,10 @@ harness = false
 name = "attention"
 harness = false
 
+[[bench]]
+name = "inference"
+harness = false
+
 [dependencies]
 memmap2 = "0.9"
 rayon   = "1.10"

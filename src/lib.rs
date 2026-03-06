@@ -73,6 +73,9 @@ pub mod quant;
 // CHANGED: simd primitives activated — commit 15.1
 pub mod simd;
 
+// commit 17.2 — benchmarking utilities (Timer, InferenceMetrics, RSS)
+pub mod bench;
+
 /// Library version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
