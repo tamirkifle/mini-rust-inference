@@ -97,7 +97,7 @@ hr
 echo
 echo "  [1/3] Building release benchmarks …"
 cd "$REPO_ROOT"
-"$CARGO" build --benches --release -q 2>&1 || {
+"$CARGO" build --benches -q 2>&1 || {
   echo "  ERROR: cargo build --benches failed" >&2; exit 1
 }
 echo "  Done."
@@ -112,30 +112,48 @@ export BENCH_N_PROMPT="$N_PROMPT"
 export BENCH_N_GEN="$N_GEN"
 export BENCH_N_WARMUP="$N_WARMUP"
 
-# Run the bench, capturing combined output; Criterion writes to stderr
-BENCH_OUTPUT=$("$CARGO" bench --bench compare_llamacpp --release 2>&1 \
-  -- --output-format criterion 2>&1 || true)
+# Run the bench, capturing combined output; Criterion prints to stdout+stderr
+# NOTE: `cargo bench` always uses the bench profile (release-equivalent); --release is not valid here
+BENCH_OUTPUT=$("$CARGO" bench --bench compare_llamacpp 2>&1 || true)
 
-# Extract mean throughput from Criterion's thrpt line:
-#   "comparison/our_engine/n128  thrpt:  [59.123 elem/s 60.456 elem/s 61.789 elem/s]"
-# We want the middle (mean) value — the 5th whitespace-separated field after "thrpt:"
-OUR_TOKS_PER_SEC=$(echo "$BENCH_OUTPUT" \
-  | grep -E 'thrpt:' \
-  | tail -1 \
+# Extract mean throughput from the comparison/ group's thrpt line.
+# Criterion format (v0.5):
+#   "                        thrpt:  [1.6170 Kelem/s 1.6430 Kelem/s 1.6613 Kelem/s]"
+# Field layout after stripping brackets: "<low> <unit> <mean> <unit> <high> <unit>"
+# We want field 3 (mean value) and field 4 (unit).
+# We grep specifically for lines AFTER "comparison/" to avoid picking up decode_only.
+THRPT_LINE=$(echo "$BENCH_OUTPUT" \
+  | awk '/^comparison\// { in_section=1 } in_section && /thrpt:/ { print; in_section=0 }')
+
+# Fall back to any thrpt: line if section detection fails
+if [[ -z "$THRPT_LINE" ]]; then
+  THRPT_LINE=$(echo "$BENCH_OUTPUT" | grep 'thrpt:' | head -1)
+fi
+
+OUR_TOKS_PER_SEC=$(echo "$THRPT_LINE" \
   | grep -oE '\[.*\]' \
   | tr -d '[]' \
   | awk '{print $3}' \
   || echo "")
 
-OUR_UNIT=$(echo "$BENCH_OUTPUT" \
-  | grep -E 'thrpt:' \
-  | tail -1 \
+OUR_UNIT=$(echo "$THRPT_LINE" \
   | grep -oE '\[.*\]' \
   | tr -d '[]' \
   | awk '{print $4}' \
   || echo "elem/s")
 
-# Normalise to tok/s (elem/s == tok/s when Throughput::Elements(N_GEN) is used)
+# Normalise Criterion SI prefixes → plain tok/s for display
+# Kelem/s = 1 000 tok/s, Melem/s = 1 000 000 tok/s
+if [[ "$OUR_UNIT" == "Kelem/s" ]]; then
+  OUR_TOKS_PER_SEC=$(awk "BEGIN {printf \"%.1f\", $OUR_TOKS_PER_SEC * 1000}" 2>/dev/null || echo "$OUR_TOKS_PER_SEC K")
+  OUR_UNIT="tok/s"
+elif [[ "$OUR_UNIT" == "Melem/s" ]]; then
+  OUR_TOKS_PER_SEC=$(awk "BEGIN {printf \"%.1f\", $OUR_TOKS_PER_SEC * 1000000}" 2>/dev/null || echo "$OUR_TOKS_PER_SEC M")
+  OUR_UNIT="tok/s"
+elif [[ "$OUR_UNIT" == "elem/s" ]]; then
+  OUR_UNIT="tok/s"
+fi
+
 if [[ -z "$OUR_TOKS_PER_SEC" ]]; then
   OUR_TOKS_PER_SEC="N/A"
 fi
@@ -165,28 +183,39 @@ if [[ -n "$LLAMA_CPP_BIN" && -x "$LLAMA_CPP_BIN" ]]; then
     # llama-bench supports: --model, --n-prompt, --n-gen, -t, --warmup
     # llama-cli / main supports different flags — we try llama-bench first
     if echo "$LLAMA_BIN_NAME" | grep -q "bench"; then
+      # llama-bench (b3000+): warmup is on by default; use --no-warmup to skip.
+      # --n-prompt / --n-gen control prompt/generation lengths; -t sets threads.
+      WARMUP_FLAG=""
+      if [[ "$N_WARMUP" -eq 0 ]]; then
+        WARMUP_FLAG="--no-warmup"
+      fi
       LLAMA_OUTPUT=$("$LLAMA_CPP_BIN" \
         --model   "$LLAMA_MODEL" \
-        --n-prompt "$N_PROMPT" \
-        --n-gen   "$N_GEN" \
+        -p        "$N_PROMPT" \
+        -n        "$N_GEN" \
         -t        "$N_THREADS" \
-        --warmup  "$N_WARMUP" \
+        $WARMUP_FLAG \
         2>&1 || true)
 
-      # llama-bench markdown table format:
-      # | model | size | ... | t/s prompt | t/s gen |
-      # Look for the eval (generation) t/s value
+      # llama-bench markdown table format (b3000+):
+      # | model | size | params | backend | threads | test | t/s |
+      # The "test" field (col 7) contains "tg<N>" for generation rows.
+      # The "t/s" field (col 8, last) contains "157.82 ± 1.03".
+      # We select rows where any |-delimited field contains "tg", then
+      # extract the last field, strip spaces and the "± …" stddev suffix.
       LLAMA_TOKS_PER_SEC=$(echo "$LLAMA_OUTPUT" \
-        | grep -v '^|.*---' \
-        | grep '|' \
-        | tail -1 \
-        | awk -F'|' '{
-            for(i=1;i<=NF;i++) {
-              gsub(/[[:space:]]/,"",$i);
-              if($i ~ /^[0-9]+(\.[0-9]+)?(±[0-9.]+)?$/) last=$i
-            }
-            print last
-          }' \
+        | awk -F'|' '
+            {
+              for (i=1; i<=NF; i++) {
+                if ($i ~ /[[:space:]]*tg[0-9]/) {
+                  val = $(NF-1)
+                  gsub(/[[:space:]]/, "", val)
+                  sub(/±.*/, "", val)
+                  print val
+                  exit
+                }
+              }
+            }' \
         || echo "")
     else
       # llama-cli / main: use --n-predict for gen tokens
