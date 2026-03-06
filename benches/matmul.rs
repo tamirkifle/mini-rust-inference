@@ -1,8 +1,17 @@
-//! Criterion micro-benchmarks for matrix multiplication kernels — commit 17.1.
+//! Criterion micro-benchmarks for matrix multiplication kernels — commit 17.1 / 18.1.
 //!
 //! Covers:
-//!   - f32 kernels: naive, blocked (32×32 tiles), AVX2/NEON, rayon-parallel
+//!   - f32 kernels: naive, blocked (arch-tuned tile), SIMD (AVX2 on x86_64 only), rayon-parallel
 //!   - INT8 kernel: matmul_int8_from_f32 (per-channel quantized weights)
+//!
+//! ## Tile sizes (commit 18.1)
+//! `blocked` uses a compile-time tile selected per architecture:
+//!   - aarch64: 64×64 (fits 192 KiB Apple Silicon L1D; eliminates 5× regression at 1024)
+//!   - x86_64 : 32×32 (fits 32 KiB L1D)
+//!
+//! ## AVX2 bench
+//! Only compiled on x86_64 — on aarch64 `matmul_avx2` falls back to `matmul_blocked`
+//! so showing it as a separate group would be misleading.
 //!
 //! Matrix sizes chosen to span L1-hot (128), L2-resident (512),
 //! and LLC-pressure (1024) regimes, matching realistic projection
@@ -10,9 +19,7 @@
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 
-use llm_engine::ops::matmul::{
-    matmul_avx2, matmul_blocked, matmul_int8_from_f32, matmul_naive, matmul_parallel,
-};
+use llm_engine::ops::matmul::{matmul_blocked, matmul_int8_from_f32, matmul_naive, matmul_parallel};
 use llm_engine::quant::int8::per_channel::{quantize_per_channel, QuantizedMatrix};
 use llm_engine::tensor::Tensor;
 
@@ -52,7 +59,12 @@ fn bench_f32_matmul(c: &mut Criterion) {
             bench.iter(|| matmul_blocked(&a, &b).unwrap());
         });
 
+        // AVX2 kernel only benchmarked where it actually executes AVX2 instructions.
+        // On aarch64 the function delegates to blocked, so it would just duplicate
+        // the "blocked" row with identical numbers — omit it to keep results honest.
+        #[cfg(target_arch = "x86_64")]
         group.bench_with_input(BenchmarkId::new("avx2", size), &size, |bench, _| {
+            use llm_engine::ops::matmul::matmul_avx2;
             bench.iter(|| matmul_avx2(&a, &b).unwrap());
         });
 
@@ -101,8 +113,8 @@ fn bench_projection(c: &mut Criterion) {
     let hidden   = 512_usize;
     let ffn_dim  = 1024_usize; // scaled proxy for 11008
 
-    let act     = make_f32(seq_len, hidden);
-    let wq_ff   = make_qmatrix(ffn_dim, hidden);
+    let act      = make_f32(seq_len, hidden);
+    let wq_ff    = make_qmatrix(ffn_dim, hidden);
     let w_ff_f32 = make_f32(ffn_dim, hidden);
 
     group.throughput(Throughput::Elements(
