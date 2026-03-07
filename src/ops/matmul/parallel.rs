@@ -85,9 +85,22 @@ pub fn matmul_parallel(a: &Tensor<f32>, b: &Tensor<f32>) -> Result<Tensor<f32>> 
         .par_chunks_mut(n)
         .enumerate()
         .for_each(|(i, c_row)| {
-            // Compute C[i, :] = A[i, :] · B
+            let a_row = &a_slice[i * k..(i + 1) * k];
+
+            // On aarch64 use explicit NEON vfmaq_f32 (4 f32/cycle) per row.
+            // This combines SIMD throughput within each row with rayon
+            // parallelism across rows — the two independently do their work.
+            #[cfg(target_arch = "aarch64")]
+            {
+                super::neon_f32::neon_gemm_row_slice(a_row, b_slice, c_row, k, n);
+                return;
+            }
+
+            // On x86_64 LLVM auto-vectorizes this scalar loop well (fixed
+            // stride-1 `for j in 0..n`), so no explicit AVX2 call needed here.
+            #[cfg(not(target_arch = "aarch64"))]
             for p in 0..k {
-                let a_ip = a_slice[i * k + p];
+                let a_ip = a_row[p];
                 for j in 0..n {
                     c_row[j] += a_ip * b_slice[p * n + j];
                 }
