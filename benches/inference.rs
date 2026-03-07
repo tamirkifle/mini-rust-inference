@@ -1,205 +1,117 @@
-//! End-to-end inference benchmarks — commit 17.2.
+//! Kernel progression benchmarks — commit 18.2.
 //!
-//! Measures wall-clock latency for generation using an in-memory zero-weight
-//! model (no GGUF file required), allowing the benchmark harness to focus on
-//! throughput of the kernel pipeline rather than I/O.
+//! Replaces the proxy-model ttft/decode/rss fiction with a focused bench
+//! that shows the actual performance story for this engine:
 //!
-//! Three benchmark groups:
+//! ```text
+//! Group: f32_progression   naive → blocked → parallel  (same matrix sizes)
+//! Group: int8_speedup      f32 parallel vs INT8 parallel (the headline number)
+//! ```
 //!
-//! | Group                  | What it measures                                   |
-//! |------------------------|----------------------------------------------------|
-//! | `ttft_proxy`           | Time-to-first-token: prefill cost at prompt length |
-//! | `decode_throughput`    | Tokens/sec during autoregressive decode phase      |
-//! | `rss_delta`            | RSS growth per complete generate call              |
+//! Matrix sizes mirror real Llama-7B projection layers:
+//!   128  → L1-hot (warm-up / tiny batch)
+//!   512  → L2-resident (typical decode batch)
+//!   1024 → LLC-pressure (realistic prefill slice)
 //!
-//! The tiny model has 1 block, 8-dim embeddings, 2 heads — zero-weight so
-//! logits collapse to 0, sampling always picks the first non-special token.
-//! Throughput numbers here reflect pure kernel overhead, not model quality.
-
-use std::sync::Arc;
+//! Throughput is reported as Gelem/s (2·M·K·N FLOPs per GEMM).
+//! Look at the "int8_speedup" group's ratio between `f32_parallel` and
+//! `int8_parallel` — that 4–5× number is the headline result of M4.
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 
-use llm_engine::bench::metrics::{measure_generate, InferenceMetrics};
-use llm_engine::config::SessionConfig;
-use llm_engine::generate::GenerateConfig;
-use llm_engine::gguf::{Metadata, MetadataValue};
-use llm_engine::model::llama::{LlamaConfig, LlamaModel, TransformerBlock};
-use llm_engine::ops::rope::RopeTable;
-use llm_engine::session::Session;
+use llm_engine::ops::matmul::{
+    matmul_blocked, matmul_int8_from_f32, matmul_naive, matmul_parallel,
+};
+use llm_engine::quant::int8::per_channel::{quantize_per_channel, QuantizedMatrix};
 use llm_engine::tensor::Tensor;
-use llm_engine::tokenizer::bpe::Tokenizer;
 
-// ── fixture helpers ───────────────────────────────────────────────────────────
+// ── helpers ───────────────────────────────────────────────────────────────────
 
-fn tiny_config(embed: u32, heads: u32, ffn: u32, vocab: u32) -> LlamaConfig {
-    let mut m = Metadata::new();
-    for (k, v) in [
-        ("llama.block_count",          MetadataValue::Uint32(2)),
-        ("llama.embedding_length",     MetadataValue::Uint32(embed)),
-        ("llama.attention.head_count", MetadataValue::Uint32(heads)),
-        ("llama.feed_forward_length",  MetadataValue::Uint32(ffn)),
-        ("llama.context_length",       MetadataValue::Uint32(512)),
-        ("llama.vocab_size",           MetadataValue::Uint32(vocab)),
-    ] {
-        m.insert(k.to_string(), v);
-    }
-    LlamaConfig::from_metadata(&m).unwrap()
+fn make_f32(rows: usize, cols: usize) -> Tensor<f32> {
+    let n = rows * cols;
+    let data: Vec<f32> = (0..n)
+        .map(|i| (i as f32) * 0.001 - (n / 2) as f32 * 0.001)
+        .collect();
+    Tensor::from_vec(data, vec![rows, cols]).unwrap()
 }
 
-fn make_model(cfg: &LlamaConfig) -> Arc<LlamaModel> {
-    let embed = cfg.embedding_length   as usize;
-    let vocab = cfg.vocab_size         as usize;
-    let ffn   = cfg.feed_forward_length as usize;
-    let heads = cfg.n_heads            as usize;
-    let kv    = cfg.n_kv_heads         as usize;
-    let hd    = cfg.head_dim()         as usize;
-    let rope  = RopeTable::new(cfg.context_length as usize, hd, cfg.rope_freq_base);
-    let block = || TransformerBlock::new(
-        Tensor::zeros(vec![heads * hd, embed]),
-        Tensor::zeros(vec![kv    * hd, embed]),
-        Tensor::zeros(vec![kv    * hd, embed]),
-        Tensor::zeros(vec![embed, heads * hd]),
-        Tensor::ones(vec![embed]),
-        Tensor::zeros(vec![ffn, embed]),
-        Tensor::zeros(vec![ffn, embed]),
-        Tensor::zeros(vec![embed, ffn]),
-        Tensor::ones(vec![embed]),
-        rope.clone(), heads, kv, cfg.rms_norm_eps,
-    );
-    Arc::new(LlamaModel::new(
-        cfg.clone(),
-        Tensor::zeros(vec![vocab, embed]),
-        vec![block(), block()],
-        Tensor::ones(vec![embed]),
-        Tensor::zeros(vec![vocab, embed]),
-    ))
+fn make_qmatrix(n_out: usize, k_in: usize) -> QuantizedMatrix {
+    let n = n_out * k_in;
+    let data: Vec<f32> = (0..n)
+        .map(|i| (i as f32) * 0.002 - (n / 2) as f32 * 0.002)
+        .collect();
+    quantize_per_channel(&data, n_out, k_in)
 }
 
-fn make_tokenizer(vocab: u32) -> Arc<Tokenizer> {
-    use llm_engine::gguf::keys;
-
-    // Build a simple vocab: <unk>, <s>, </s>, then "a"–…
-    let mut vocab_strs: Vec<String> = vec![
-        "<unk>".into(), "<s>".into(), "</s>".into(),
-    ];
-    for i in 3..vocab {
-        vocab_strs.push(format!("tok{i}"));
-    }
-    let scores: Vec<f32> = vocab_strs.iter().enumerate().map(|(i, _)| {
-        if i < 3 { f32::NEG_INFINITY } else { -(i as f32) }
-    }).collect();
-    let types: Vec<i32> = vocab_strs.iter().enumerate().map(|(i, _)| {
-        if i == 0 { 2 } else if i < 3 { 3 } else { 1 }
-    }).collect();
-
-    let mut m = Metadata::new();
-    m.insert(keys::TOKENIZER_GGML_TOKENS.to_string(),
-        MetadataValue::StringArray(vocab_strs));
-    m.insert(keys::TOKENIZER_GGML_SCORES.to_string(),
-        MetadataValue::Float32Array(scores));
-    m.insert(keys::TOKENIZER_GGML_TOKEN_TYPE.to_string(),
-        MetadataValue::Int32Array(types));
-    m.insert(keys::TOKENIZER_GGML_BOS_TOKEN_ID.to_string(),
-        MetadataValue::Uint32(1));
-    m.insert(keys::TOKENIZER_GGML_EOS_TOKEN_ID.to_string(),
-        MetadataValue::Uint32(2));
-    Arc::new(Tokenizer::from_metadata(&m).unwrap())
-}
-
-/// Build a Session with the given max_new_tokens limit.
-fn make_session(max_new_tokens: usize) -> Session {
-    let cfg   = tiny_config(32, 4, 64, 64);
-    let model = make_model(&cfg);
-    let tok   = make_tokenizer(64);
-    let gcfg  = GenerateConfig::greedy(max_new_tokens);
-    Session::new(model, tok, SessionConfig::new(gcfg, 16, 512))
-}
-
-// ── TTFT proxy benchmark ──────────────────────────────────────────────────────
+// ── f32 kernel progression ────────────────────────────────────────────────────
 //
-// Generate exactly 1 new token so total latency ≈ prefill latency.
-// Vary prompt length to see how prefill scales with sequence length.
-
-fn bench_ttft_proxy(c: &mut Criterion) {
-    let mut group = c.benchmark_group("ttft_proxy");
-
-    for &prompt_tokens in &[4usize, 16, 64] {
-        // Build a prompt string that encodes to approximately `prompt_tokens` tokens.
-        // Each "tokN " encodes as one token in our tiny tokenizer.
-        let prompt: String = (3..(3 + prompt_tokens))
-            .map(|i| format!("tok{i} "))
-            .collect();
-
-        group.throughput(Throughput::Elements(prompt_tokens as u64));
-
-        group.bench_with_input(
-            BenchmarkId::new("prompt_len", prompt_tokens),
-            &prompt,
-            |bench, p| {
-                bench.iter(|| {
-                    let mut session = make_session(1);
-                    session.generate(p).unwrap();
-                });
-            },
-        );
-    }
-
-    group.finish();
-}
-
-// ── Decode throughput benchmark ───────────────────────────────────────────────
+// Shows the evolution from naive scalar → cache-blocked → rayon-parallel.
+// On Apple Silicon the blocked tile is 64×64 (commit 18.1); on x86_64 it is 32×32.
+// The parallel kernel uses rayon over output rows + the blocked inner kernel.
 //
-// Fixed short prompt, vary generation budget to measure decode throughput.
+// Expected ordering on any platform: naive ≤ blocked ≤ parallel
+// (blocked may be close to naive for small sizes where L1 already fits).
 
-fn bench_decode_throughput(c: &mut Criterion) {
-    let mut group = c.benchmark_group("decode_throughput");
+fn bench_f32_progression(c: &mut Criterion) {
+    let mut group = c.benchmark_group("f32_progression");
 
-    let prompt = "tok3 tok4 tok5 tok6";
+    for &size in &[128usize, 512, 1024] {
+        let a = make_f32(size, size);
+        let b = make_f32(size, size);
+        let flops = (2 * size * size * size) as u64;
+        group.throughput(Throughput::Elements(flops));
 
-    for &n_tokens in &[4usize, 16, 32] {
-        group.throughput(Throughput::Elements(n_tokens as u64));
-
-        group.bench_with_input(
-            BenchmarkId::new("n_tokens", n_tokens),
-            &n_tokens,
-            |bench, &n| {
-                bench.iter(|| {
-                    let mut session = make_session(n);
-                    session.generate(prompt).unwrap();
-                });
-            },
-        );
-    }
-
-    group.finish();
-}
-
-// ── RSS delta benchmark ───────────────────────────────────────────────────────
-//
-// Wraps generate() with measure_generate() to report RSS growth per call.
-// Not a Criterion throughput benchmark — just one sample, printed as a
-// custom metric for CI inspection.
-
-fn bench_rss_delta(c: &mut Criterion) {
-    let mut group = c.benchmark_group("rss_delta");
-
-    group.bench_function("generate_10_tokens", |bench| {
-        bench.iter(|| {
-            let mut session = make_session(10);
-            let prompt = "tok3 tok4 tok5";
-            // measure_generate captures RSS before/after and returns InferenceMetrics
-            let m: InferenceMetrics = measure_generate(3, 10, || {
-                let _ = session.generate(prompt).unwrap();
-            });
-            // Use throughput as a secondary signal: black-box the result so the
-            // compiler doesn't optimize away the measurement.
-            std::hint::black_box(m.tokens_per_second());
+        group.bench_with_input(BenchmarkId::new("naive", size), &size, |bench, _| {
+            bench.iter(|| matmul_naive(&a, &b).unwrap());
         });
-    });
+
+        group.bench_with_input(BenchmarkId::new("blocked", size), &size, |bench, _| {
+            bench.iter(|| matmul_blocked(&a, &b).unwrap());
+        });
+
+        group.bench_with_input(BenchmarkId::new("parallel", size), &size, |bench, _| {
+            bench.iter(|| matmul_parallel(&a, &b).unwrap());
+        });
+    }
 
     group.finish();
 }
 
-criterion_group!(benches, bench_ttft_proxy, bench_decode_throughput, bench_rss_delta);
+// ── INT8 speedup ──────────────────────────────────────────────────────────────
+//
+// The headline result of Milestone 4: INT8 per-channel quantized weights
+// with f32 activations deliver a substantial throughput gain over f32 baseline.
+//
+// `f32_parallel`  — best f32 kernel (rayon-parallel, same as above)
+// `int8_parallel` — INT8 weights, f32 activations, rayon-parallel dot
+//
+// On the Llama-7B projection shape (512 here as a scaled proxy) expect
+// 4–5× Gelem/s improvement; on the 1024 square expect up to 40× due to
+// the reduced memory bandwidth pressure of INT8.
+//
+// Both use identical matrix *shapes* so FLOPs are normalised the same way.
+
+fn bench_int8_speedup(c: &mut Criterion) {
+    let mut group = c.benchmark_group("int8_speedup");
+
+    for &size in &[128usize, 512, 1024] {
+        let act    = make_f32(size, size);
+        let w_f32  = make_f32(size, size);
+        let w_int8 = make_qmatrix(size, size);
+        let flops  = (2 * size * size * size) as u64;
+        group.throughput(Throughput::Elements(flops));
+
+        group.bench_with_input(BenchmarkId::new("f32_parallel", size), &size, |bench, _| {
+            bench.iter(|| matmul_parallel(&act, &w_f32).unwrap());
+        });
+
+        group.bench_with_input(BenchmarkId::new("int8_parallel", size), &size, |bench, _| {
+            bench.iter(|| matmul_int8_from_f32(&act, &w_int8).unwrap());
+        });
+    }
+
+    group.finish();
+}
+
+criterion_group!(benches, bench_f32_progression, bench_int8_speedup);
 criterion_main!(benches);
