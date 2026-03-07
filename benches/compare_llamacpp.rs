@@ -1,212 +1,212 @@
-//! Controlled comparison benchmark — commit 17.3.
+//! Memory efficiency benchmarks — commit 18.3.
 //!
-//! Benchmarks this engine under the same `N_PROMPT` / `N_GEN` settings that
-//! `scripts/benchmark_comparison.sh` uses when invoking llama.cpp, enabling
-//! an apples-to-apples throughput comparison.
+//! Replaces the misleading proxy-vs-Metal comparison with a concrete answer
+//! to the key deployment question: **does INT8 fit Llama 7B in 8 GB RAM?**
 //!
-//! # Configuration (via environment variables)
+//! ## Design
 //!
-//! | Variable          | Default | Meaning                                    |
-//! |-------------------|---------|--------------------------------------------|
-//! | `BENCH_N_PROMPT`  | 64      | Prompt token count (prefill length)        |
-//! | `BENCH_N_GEN`     | 128     | Tokens to generate per iteration           |
-//! | `BENCH_N_WARMUP`  | 2       | Extra warm-up iterations before sampling   |
+//! We allocate representative weight slices at Llama-7B projection shape
+//! (4096 × 4096 = 16.7 M parameters per matrix) in both f32 and INT8, then
+//! measure the actual RSS delta reported by the OS.  No GGUF file required.
 //!
-//! # Throughput reporting
+//! Two benchmark groups:
 //!
-//! Using `Throughput::Elements(N_GEN)` causes Criterion to report results as
-//! `thrpt: [lower mean upper] elem/s` where `elem/s == tok/s`.
-//! `scripts/benchmark_comparison.sh` greps for `thrpt:` and extracts the mean.
+//! | Group                 | What it measures                                  |
+//! |-----------------------|---------------------------------------------------|
+//! | `weight_footprint`    | Alloc + matmul + drop one full 7-projection layer |
+//! | `memory_efficiency`   | RSS delta while holding N layers live in memory   |
 //!
-//! # Model note
+//! A static summary is printed before the first group showing the 7B-scale
+//! extrapolation for both dtypes.
 //!
-//! Uses a zero-weight in-memory proxy model — no GGUF file is required.
-//! This measures raw kernel throughput (matmul, attention, norm pipeline),
-//! not real model quality.  For a fair quality comparison use
-//! `scripts/benchmark_comparison.sh` with a real GGUF model and llama.cpp.
+//! ## llama.cpp comparison note
+//!
+//! The companion shell script `scripts/benchmark_comparison.sh` can still run
+//! a CPU-vs-CPU latency comparison when `LLAMA_CPP_BIN` and `LLAMA_MODEL` are
+//! set — see the script for usage.  That path is **not** benchmarked here
+//! because our engine runs on the CPU scalar/SIMD path while llama.cpp on
+//! macOS defaults to Metal GPU; comparing them as though they are the same
+//! hardware backend is misleading.
 
-use std::sync::Arc;
+use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-
-use llm_engine::config::SessionConfig;
-use llm_engine::generate::GenerateConfig;
-use llm_engine::gguf::{Metadata, MetadataValue};
-use llm_engine::model::llama::{LlamaConfig, LlamaModel, TransformerBlock};
-use llm_engine::ops::rope::RopeTable;
-use llm_engine::session::Session;
+use llm_engine::memory::stats::{format_bytes, query_rss};
+use llm_engine::ops::matmul::matmul_int8_from_f32;
+use llm_engine::ops::matmul::matmul_parallel;
+use llm_engine::quant::int8::per_channel::{quantize_per_channel, QuantizedMatrix};
 use llm_engine::tensor::Tensor;
-use llm_engine::tokenizer::bpe::Tokenizer;
 
-// ── settings (env-var-configurable, with defaults matching the shell script) ───
+// ── Llama-7B geometry constants ───────────────────────────────────────────────
 
-fn n_prompt() -> usize {
-    std::env::var("BENCH_N_PROMPT")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(64)
+/// Hidden dimension of Llama-7B.
+const D_MODEL: usize = 4096;
+/// FFN intermediate dimension of Llama-7B.
+const D_FFN: usize = 11008;
+/// Number of transformer layers in Llama-7B.
+const N_LAYERS: usize = 32;
+
+// Projection sizes (rows × cols): Q, K, V, O, gate, up, down
+const PROJ_PARAMS: &[(usize, usize)] = &[
+    (D_MODEL, D_MODEL),  // Q
+    (D_MODEL, D_MODEL),  // K
+    (D_MODEL, D_MODEL),  // V
+    (D_MODEL, D_MODEL),  // O
+    (D_FFN,   D_MODEL),  // gate
+    (D_FFN,   D_MODEL),  // up
+    (D_MODEL, D_FFN),    // down
+];
+
+/// Total f32 bytes for all projections in one transformer layer.
+fn layer_f32_bytes() -> usize {
+    PROJ_PARAMS.iter().map(|(r, c)| r * c * 4).sum()
 }
 
-fn n_gen() -> usize {
-    std::env::var("BENCH_N_GEN")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(128)
+/// Total INT8 bytes for the same projections (1 byte/weight + scale overhead).
+fn layer_int8_bytes() -> usize {
+    PROJ_PARAMS.iter().map(|(r, c)| r * c).sum()
 }
 
-// ── fixture helpers (shared with benches/inference.rs) ────────────────────────
+// ── helpers ───────────────────────────────────────────────────────────────────
 
-fn make_config(vocab: u32) -> LlamaConfig {
-    let mut m = Metadata::new();
-    for (k, v) in [
-        ("llama.block_count",          MetadataValue::Uint32(2)),
-        ("llama.embedding_length",     MetadataValue::Uint32(64)),
-        ("llama.attention.head_count", MetadataValue::Uint32(8)),
-        ("llama.feed_forward_length",  MetadataValue::Uint32(128)),
-        ("llama.context_length",       MetadataValue::Uint32(1024)),
-        ("llama.vocab_size",           MetadataValue::Uint32(vocab)),
-    ] {
-        m.insert(k.to_string(), v);
-    }
-    LlamaConfig::from_metadata(&m).unwrap()
-}
-
-fn make_model(cfg: &LlamaConfig) -> Arc<LlamaModel> {
-    let embed = cfg.embedding_length    as usize;
-    let vocab = cfg.vocab_size          as usize;
-    let ffn   = cfg.feed_forward_length as usize;
-    let heads = cfg.n_heads             as usize;
-    let kv    = cfg.n_kv_heads          as usize;
-    let hd    = cfg.head_dim()          as usize;
-    let rope  = RopeTable::new(cfg.context_length as usize, hd, cfg.rope_freq_base);
-    let block = || TransformerBlock::new(
-        Tensor::zeros(vec![heads * hd, embed]),
-        Tensor::zeros(vec![kv    * hd, embed]),
-        Tensor::zeros(vec![kv    * hd, embed]),
-        Tensor::zeros(vec![embed, heads * hd]),
-        Tensor::ones(vec![embed]),
-        Tensor::zeros(vec![ffn, embed]),
-        Tensor::zeros(vec![ffn, embed]),
-        Tensor::zeros(vec![embed, ffn]),
-        Tensor::ones(vec![embed]),
-        rope.clone(), heads, kv, cfg.rms_norm_eps,
-    );
-    Arc::new(LlamaModel::new(
-        cfg.clone(),
-        Tensor::zeros(vec![vocab, embed]),
-        vec![block(), block()],
-        Tensor::ones(vec![embed]),
-        Tensor::zeros(vec![vocab, embed]),
-    ))
-}
-
-fn make_tokenizer(vocab: u32) -> Arc<Tokenizer> {
-    use llm_engine::gguf::keys;
-    let mut vocab_strs: Vec<String> = vec!["<unk>".into(), "<s>".into(), "</s>".into()];
-    for i in 3..vocab {
-        vocab_strs.push(format!("tok{i}"));
-    }
-    let scores: Vec<f32> = vocab_strs.iter().enumerate()
-        .map(|(i, _)| if i < 3 { f32::NEG_INFINITY } else { -(i as f32) })
+fn make_f32_proj(rows: usize, cols: usize) -> Tensor<f32> {
+    let n = rows * cols;
+    let data: Vec<f32> = (0..n)
+        .map(|i| (i as f32) * 0.001 - (n / 2) as f32 * 0.001)
         .collect();
-    let types: Vec<i32> = vocab_strs.iter().enumerate()
-        .map(|(i, _)| if i == 0 { 2 } else if i < 3 { 3 } else { 1 })
-        .collect();
-
-    let mut m = Metadata::new();
-    m.insert(keys::TOKENIZER_GGML_TOKENS.to_string(),      MetadataValue::StringArray(vocab_strs));
-    m.insert(keys::TOKENIZER_GGML_SCORES.to_string(),      MetadataValue::Float32Array(scores));
-    m.insert(keys::TOKENIZER_GGML_TOKEN_TYPE.to_string(),  MetadataValue::Int32Array(types));
-    m.insert(keys::TOKENIZER_GGML_BOS_TOKEN_ID.to_string(),MetadataValue::Uint32(1));
-    m.insert(keys::TOKENIZER_GGML_EOS_TOKEN_ID.to_string(),MetadataValue::Uint32(2));
-    Arc::new(Tokenizer::from_metadata(&m).unwrap())
+    Tensor::from_vec(data, vec![rows, cols]).unwrap()
 }
 
-
-// ── comparison benchmark ───────────────────────────────────────────────────────
-
-fn bench_comparison(c: &mut Criterion) {
-    let vocab: u32 = 256;
-    let n_prompt = n_prompt();
-    let n_gen    = n_gen();
-
-    let cfg   = make_config(vocab);
-    let model = make_model(&cfg);
-    let tok   = make_tokenizer(vocab);
-
-    // Build a prompt string that encodes to n_prompt tokens.
-    // Each "tokN " is one token in the synthetic vocabulary.
-    let prompt: String = (3..(3 + n_prompt))
-        .map(|i| format!("tok{i} "))
+fn make_int8_proj(rows: usize, cols: usize) -> QuantizedMatrix {
+    let n = rows * cols;
+    let data: Vec<f32> = (0..n)
+        .map(|i| (i as f32) * 0.001 - (n / 2) as f32 * 0.001)
         .collect();
+    quantize_per_channel(&data, rows, cols)
+}
 
-    let mut group = c.benchmark_group("comparison");
+/// Print the 7B-scale memory extrapolation once at bench startup.
+fn print_7b_summary() {
+    let f32_per_layer = layer_f32_bytes();
+    let i8_per_layer  = layer_int8_bytes();
+    let f32_total     = f32_per_layer * N_LAYERS;
+    let i8_total      = i8_per_layer  * N_LAYERS;
+    let ratio         = f32_total as f64 / i8_total as f64;
 
-    // Throughput::Elements(n_gen) → Criterion reports elem/s ≡ tok/s
-    // The shell script greps for "thrpt:" to extract the mean.
-    group.throughput(Throughput::Elements(n_gen as u64));
+    println!("\n╔══════════════════════════════════════════════════════╗");
+    println!("║          Memory Footprint — Llama-7B at Scale        ║");
+    println!("╠══════════════════════════════════════════════════════╣");
+    println!("║  dtype   per-layer     total ({N_LAYERS} layers)            ║");
+    println!("║  f32     {:<12}  {:<28} ║", format_bytes(f32_per_layer), format_bytes(f32_total));
+    println!("║  INT8    {:<12}  {:<28} ║", format_bytes(i8_per_layer),  format_bytes(i8_total));
+    println!("║  ratio   {ratio:.1}×                                       ║");
+    println!("╚══════════════════════════════════════════════════════╝");
+    println!("  f32 fits in 16 GB: {}", if f32_total < 16 * 1024 * 1024 * 1024 { "yes" } else { "no" });
+    println!("  INT8 fits in  8 GB: {}", if i8_total  <  8 * 1024 * 1024 * 1024 { "yes" } else { "no" });
+    println!();
+}
 
-    // Bench label encodes n_gen so the shell script knows the denominator.
-    group.bench_with_input(
-        BenchmarkId::new("our_engine", format!("n{n_gen}")),
-        &prompt,
-        |bench, p| {
-            bench.iter(|| {
-                let gcfg = GenerateConfig::greedy(n_gen);
-                // chunk_size=64 matches a realistic prefill chunk for this proxy model
-                let scfg = SessionConfig::new(gcfg, 64, 1024);
-                let mut session = Session::new(
-                    Arc::clone(&model),
-                    Arc::clone(&tok),
-                    scfg,
-                );
-                // reset() is called inside generate(); each iter starts fresh
-                session.generate(p).unwrap();
-            });
-        },
-    );
+// ── Group 1: weight_footprint ─────────────────────────────────────────────────
+//
+// Each iter allocates all 7 projections for one transformer layer, runs a
+// single representative matmul (Q projection), then drops the weights.
+// Throughput::Bytes shows allocation bandwidth by dtype.
+
+fn bench_weight_footprint(c: &mut Criterion) {
+    print_7b_summary();
+
+    let mut group = c.benchmark_group("weight_footprint");
+    let act = make_f32_proj(1, D_MODEL);
+
+    group.throughput(Throughput::Bytes(layer_f32_bytes() as u64));
+    group.bench_function("f32_layer", |bench| {
+        bench.iter(|| {
+            let projs: Vec<Tensor<f32>> = PROJ_PARAMS
+                .iter()
+                .map(|&(r, c)| make_f32_proj(r, c))
+                .collect();
+            let out = matmul_parallel(&act, &projs[0].transpose(0, 1).unwrap()).unwrap();
+            std::hint::black_box(out);
+            drop(projs);
+        });
+    });
+
+    group.throughput(Throughput::Bytes(layer_int8_bytes() as u64));
+    group.bench_function("int8_layer", |bench| {
+        bench.iter(|| {
+            let projs: Vec<QuantizedMatrix> = PROJ_PARAMS
+                .iter()
+                .map(|&(r, c)| make_int8_proj(r, c))
+                .collect();
+            let out = matmul_int8_from_f32(&act, &projs[0]).unwrap();
+            std::hint::black_box(out);
+            drop(projs);
+        });
+    });
 
     group.finish();
 }
 
-// ── decode-only path (matches llama.cpp's "tg" / token generation metric) ─────
+// ── Group 2: memory_efficiency ────────────────────────────────────────────────
+//
+// Allocates N_BENCH_LAYERS layers of weights, queries RSS before/after, and
+// prints the delta.  Uses 4 layers (not 32) to keep bench runtime reasonable;
+// the ratio extrapolates linearly to full 7B scale.
 
-fn bench_decode_only(c: &mut Criterion) {
-    let vocab: u32 = 256;
-    let n_gen    = n_gen();
-    // Short fixed prompt so prefill cost is negligible; this isolates decode.
-    let n_prompt_short = 4_usize;
+const N_BENCH_LAYERS: usize = 4;
 
-    let cfg   = make_config(vocab);
-    let model = make_model(&cfg);
-    let tok   = make_tokenizer(vocab);
+fn bench_memory_efficiency(c: &mut Criterion) {
+    let mut group = c.benchmark_group("memory_efficiency");
+    let act = make_f32_proj(1, D_MODEL);
 
-    let short_prompt: String = (3..(3 + n_prompt_short))
-        .map(|i| format!("tok{i} "))
-        .collect();
+    // f32 slice
+    {
+        let rss_before  = query_rss();
+        let f32_layers: Vec<Vec<Tensor<f32>>> = (0..N_BENCH_LAYERS)
+            .map(|_| PROJ_PARAMS.iter().map(|&(r, c)| make_f32_proj(r, c)).collect())
+            .collect();
+        let rss_after = query_rss();
+        println!(
+            "[memory_efficiency] f32 {N_BENCH_LAYERS} layers: allocated {} | RSS delta {}",
+            format_bytes(layer_f32_bytes() * N_BENCH_LAYERS),
+            format_bytes(rss_after.saturating_sub(rss_before)),
+        );
 
-    let mut group = c.benchmark_group("decode_only");
-    group.throughput(Throughput::Elements(n_gen as u64));
-
-    group.bench_with_input(
-        BenchmarkId::new("our_engine", format!("n{n_gen}")),
-        &short_prompt,
-        |bench, p| {
+        group.throughput(Throughput::Bytes((layer_f32_bytes() * N_BENCH_LAYERS) as u64));
+        group.bench_function(format!("f32_{N_BENCH_LAYERS}layers"), |bench| {
             bench.iter(|| {
-                let gcfg = GenerateConfig::greedy(n_gen);
-                let scfg = SessionConfig::new(gcfg, 64, 1024);
-                let mut session = Session::new(
-                    Arc::clone(&model),
-                    Arc::clone(&tok),
-                    scfg,
-                );
-                session.generate(p).unwrap();
+                let out = matmul_parallel(&act, &f32_layers[0][0].transpose(0, 1).unwrap())
+                    .unwrap();
+                std::hint::black_box(out);
             });
-        },
-    );
+        });
+        std::hint::black_box(&f32_layers);
+    }
+
+    // INT8 slice
+    {
+        let rss_before  = query_rss();
+        let i8_layers: Vec<Vec<QuantizedMatrix>> = (0..N_BENCH_LAYERS)
+            .map(|_| PROJ_PARAMS.iter().map(|&(r, c)| make_int8_proj(r, c)).collect())
+            .collect();
+        let rss_after = query_rss();
+        println!(
+            "[memory_efficiency] INT8 {N_BENCH_LAYERS} layers: allocated {} | RSS delta {}",
+            format_bytes(layer_int8_bytes() * N_BENCH_LAYERS),
+            format_bytes(rss_after.saturating_sub(rss_before)),
+        );
+
+        group.throughput(Throughput::Bytes((layer_int8_bytes() * N_BENCH_LAYERS) as u64));
+        group.bench_function(format!("int8_{N_BENCH_LAYERS}layers"), |bench| {
+            bench.iter(|| {
+                let out = matmul_int8_from_f32(&act, &i8_layers[0][0]).unwrap();
+                std::hint::black_box(out);
+            });
+        });
+        std::hint::black_box(&i8_layers);
+    }
 
     group.finish();
 }
 
-criterion_group!(benches, bench_comparison, bench_decode_only);
+criterion_group!(benches, bench_weight_footprint, bench_memory_efficiency);
 criterion_main!(benches);
