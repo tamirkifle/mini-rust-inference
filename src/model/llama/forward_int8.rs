@@ -37,9 +37,11 @@ use crate::model::llama::{
 };
 use crate::ops::activation::swiglu;
 use crate::ops::matmul::matmul_int8_from_f32;
+use crate::ops::matmul::matmul_int8_parallel;
 use crate::ops::norm::rmsnorm;
 use crate::ops::rope::{rope_apply, RopeTable};
 use crate::quant::int8::per_channel::{quantize_per_channel, QuantizedMatrix};
+use crate::quant::int8::symmetric::quantize_symmetric;
 use crate::tensor::Tensor;
 
 // ── quantization helper ───────────────────────────────────────────────────────
@@ -69,6 +71,28 @@ fn quantize_tensor(t: &Tensor<f32>) -> QuantizedMatrix {
 #[inline]
 fn proj_int8(input: &Tensor<f32>, qw: &QuantizedMatrix) -> Result<Tensor<f32>> {
     Ok(matmul_int8_from_f32(input, qw)?)
+}
+
+/// Parallel INT8 linear projection using rayon over output rows.
+///
+/// Equivalent to [`proj_int8`] but routes through [`matmul_int8_parallel`],
+/// which distributes output rows across the rayon thread pool.  The inner
+/// dot product uses NEON on aarch64 and AVX2 on x86_64 — combining SIMD
+/// throughput within each row with multi-core parallelism across rows.
+///
+/// **When to use:** prefill paths with seq_len ≥ 8 where M (number of rows)
+/// is large enough to amortize rayon dispatch overhead.  For decode (M = 1)
+/// use [`proj_int8`] — rayon provides no benefit and adds thread-pool overhead.
+#[inline]
+fn proj_int8_par(input: &Tensor<f32>, qw: &QuantizedMatrix) -> Result<Tensor<f32>> {
+    let m = input.dims()[0];
+    let input_c: Cow<Tensor<f32>> = if input.is_contiguous() {
+        Cow::Borrowed(input)
+    } else {
+        Cow::Owned(input.contiguous())
+    };
+    let (act_q, act_scale) = quantize_symmetric(input_c.as_slice());
+    Ok(matmul_int8_parallel(&act_q, act_scale, qw, m)?)
 }
 
 // ── add_elementwise ───────────────────────────────────────────────────────────
@@ -164,6 +188,23 @@ impl TransformerBlockInt8 {
         self.ffn_sublayer(&x)
     }
 
+    /// Parallel cached prefill forward — same as [`forward_cached`] but uses
+    /// [`matmul_int8_parallel`] (rayon over output rows) for all seven
+    /// projections: Q, K, V, out, gate, up, down.
+    ///
+    /// Beneficial for chunk sizes ≥ 8 tokens on multi-core hardware.  For
+    /// single-token decode use [`forward_decode`] instead.
+    ///
+    /// Results are numerically identical to [`forward_cached`] — same
+    /// quantization path, only scheduling differs.
+    pub fn forward_cached_parallel(
+        &self, x: &Tensor<f32>, start_pos: usize,
+        cache: &mut KvCache, layer: usize,
+    ) -> Result<Tensor<f32>> {
+        let x = self.attn_sublayer_cached_parallel(x, start_pos, cache, layer)?;
+        self.ffn_sublayer_parallel(&x)
+    }
+
     /// Single-token decode step — appends one K/V row to `cache[layer]`.
     pub fn forward_decode(
         &self, x: &Tensor<f32>, pos: usize,
@@ -249,6 +290,41 @@ impl TransformerBlockInt8 {
         let up      = proj_int8(&normed, &self.wup)?;
         let hidden  = swiglu(&gate, &up)?;
         let ffn_out = proj_int8(&hidden, &self.wdown)?;
+        add_elementwise(x, &ffn_out)
+    }
+
+    // ── parallel sublayers (commit 18.6) ─────────────────────────────────
+
+    fn attn_sublayer_cached_parallel(
+        &self, x: &Tensor<f32>, start_pos: usize,
+        cache: &mut KvCache, layer: usize,
+    ) -> Result<Tensor<f32>> {
+        let seq = x.dims()[0];
+        let normed = rmsnorm(x, &self.attn_norm, self.rms_norm_eps)?;
+        let mut q  = proj_int8_par(&normed, &self.wq)?;
+        let mut k  = proj_int8_par(&normed, &self.wk)?;
+        let v      = proj_int8_par(&normed, &self.wv)?;
+        let hd_q = q.dims()[1] / self.n_heads;
+        let hd_k = k.dims()[1] / self.n_kv_heads;
+        q = q.reshape(vec![seq, self.n_heads,    hd_q])?;
+        k = k.reshape(vec![seq, self.n_kv_heads, hd_k])?;
+        rope_apply(&mut q, &self.rope_table, start_pos)?;
+        rope_apply(&mut k, &self.rope_table, start_pos)?;
+        q = q.reshape(vec![seq, self.n_heads    * hd_q])?;
+        k = k.reshape(vec![seq, self.n_kv_heads * hd_k])?;
+        let attn_out = cached_attention_prefill(
+            cache, layer, start_pos, &q, &k, &v, self.n_heads, self.n_kv_heads,
+        )?;
+        let projected = proj_int8_par(&attn_out, &self.wo)?;
+        add_elementwise(x, &projected)
+    }
+
+    fn ffn_sublayer_parallel(&self, x: &Tensor<f32>) -> Result<Tensor<f32>> {
+        let normed  = rmsnorm(x, &self.ffn_norm, self.rms_norm_eps)?;
+        let gate    = proj_int8_par(&normed, &self.wgate)?;
+        let up      = proj_int8_par(&normed, &self.wup)?;
+        let hidden  = swiglu(&gate, &up)?;
+        let ffn_out = proj_int8_par(&hidden, &self.wdown)?;
         add_elementwise(x, &ffn_out)
     }
 }
@@ -619,5 +695,92 @@ mod tests {
         let model = make_int8_model(&cfg);
         assert_eq!(model.config().block_count, 2);
         assert_eq!(model.config().vocab_size, 32);
+    }
+
+    // ── forward_cached_parallel tests (commit 18.6) ───────────────────────
+
+    fn make_single_int8_block(cfg: &LlamaConfig) -> TransformerBlockInt8 {
+        let embed = cfg.embedding_length    as usize;
+        let ffn   = cfg.feed_forward_length as usize;
+        let heads = cfg.n_heads             as usize;
+        let kv    = cfg.n_kv_heads          as usize;
+        let hd    = cfg.head_dim()          as usize;
+        let qd    = heads * hd;
+        let kvd   = kv    * hd;
+        let rope  = RopeTable::new(cfg.context_length as usize, hd, cfg.rope_freq_base);
+        TransformerBlockInt8::new(
+            quantize_tensor(&smooth_weight(qd,   embed, 1.0)),
+            quantize_tensor(&smooth_weight(kvd,  embed, 1.1)),
+            quantize_tensor(&smooth_weight(kvd,  embed, 1.2)),
+            quantize_tensor(&smooth_weight(embed, qd,   1.3)),
+            Tensor::ones(vec![embed]),
+            quantize_tensor(&smooth_weight(ffn,  embed, 1.4)),
+            quantize_tensor(&smooth_weight(ffn,  embed, 1.5)),
+            quantize_tensor(&smooth_weight(embed, ffn,  1.6)),
+            Tensor::ones(vec![embed]),
+            rope, heads, kv, cfg.rms_norm_eps,
+        )
+    }
+
+    #[test]
+    fn forward_cached_parallel_output_shape() {
+        let cfg       = tiny_config();
+        let block     = make_single_int8_block(&cfg);
+        let embed     = cfg.embedding_length as usize;
+        let seq       = 4_usize;
+        let n_kv      = cfg.n_kv_heads as usize;
+        let hd        = cfg.head_dim()  as usize;
+        let x         = Tensor::from_vec(vec![0.1_f32; seq * embed], vec![seq, embed]).unwrap();
+        let mut cache = KvCache::new(1, cfg.context_length as usize, n_kv, hd);
+        let out = block.forward_cached_parallel(&x, 0, &mut cache, 0).unwrap();
+        assert_eq!(out.dims(), &[seq, embed]);
+    }
+
+    #[test]
+    fn forward_cached_parallel_no_nan() {
+        let cfg       = tiny_config();
+        let block     = make_single_int8_block(&cfg);
+        let embed     = cfg.embedding_length as usize;
+        let seq       = 8_usize;
+        let n_kv      = cfg.n_kv_heads as usize;
+        let hd        = cfg.head_dim()  as usize;
+        let data: Vec<f32> = (0..seq * embed).map(|i| (i as f32 * 0.01).sin()).collect();
+        let x         = Tensor::from_vec(data, vec![seq, embed]).unwrap();
+        let mut cache = KvCache::new(1, cfg.context_length as usize, n_kv, hd);
+        let out = block.forward_cached_parallel(&x, 0, &mut cache, 0).unwrap();
+        for &v in out.as_slice() {
+            assert!(!v.is_nan(),      "NaN in parallel INT8 block output");
+            assert!(!v.is_infinite(), "Inf in parallel INT8 block output");
+        }
+    }
+
+    /// Parallel must produce numerically identical output to sequential
+    /// (same quantization arithmetic, only scheduling differs).
+    #[test]
+    fn forward_cached_parallel_matches_sequential() {
+        let cfg       = tiny_config();
+        let block     = make_single_int8_block(&cfg);
+        let embed     = cfg.embedding_length as usize;
+        let seq       = 8_usize;
+        let n_kv      = cfg.n_kv_heads as usize;
+        let hd        = cfg.head_dim()  as usize;
+        let data: Vec<f32> = (0..seq * embed).map(|i| (i as f32 * 0.017 - 0.5).tanh()).collect();
+        let x = Tensor::from_vec(data, vec![seq, embed]).unwrap();
+
+        let mut cache_seq = KvCache::new(1, cfg.context_length as usize, n_kv, hd);
+        let mut cache_par = KvCache::new(1, cfg.context_length as usize, n_kv, hd);
+
+        let out_seq = block.forward_cached(&x, 0, &mut cache_seq, 0).unwrap();
+        let out_par = block.forward_cached_parallel(&x, 0, &mut cache_par, 0).unwrap();
+
+        assert_eq!(out_seq.dims(), out_par.dims());
+        // Parallel uses the same quantize_symmetric → matmul_int8_parallel path as
+        // sequential uses matmul_int8_from_f32 → same arithmetic → bit-identical.
+        for (i, (s, p)) in out_seq.as_slice().iter().zip(out_par.as_slice()).enumerate() {
+            assert_eq!(
+                s.to_bits(), p.to_bits(),
+                "element {i}: seq={s} par={p} — parallel and sequential INT8 paths diverged"
+            );
+        }
     }
 }
