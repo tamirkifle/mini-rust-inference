@@ -33,6 +33,10 @@ harness = false
 name = "compare_llamacpp"
 harness = false
 
+[[bench]]
+name = "int8_prefill"
+harness = false
+
 [dependencies]
 memmap2 = "0.9"
 rayon   = "1.10"

@@ -1,12 +1,18 @@
-//! Kernel progression benchmarks — commit 18.2.
+//! Kernel progression benchmarks — commit 18.2 / 18.6.
 //!
 //! Replaces the proxy-model ttft/decode/rss fiction with a focused bench
 //! that shows the actual performance story for this engine:
 //!
 //! ```text
 //! Group: f32_progression   naive → blocked → parallel  (same matrix sizes)
-//! Group: int8_speedup      f32 parallel vs INT8 parallel (the headline number)
+//! Group: int8_speedup      f32_parallel vs INT8_parallel (BOTH now use rayon)
 //! ```
+//!
+//! ## Fix (commit 18.6)
+//! Prior to this fix, `int8_speedup/int8_parallel` called `matmul_int8_from_f32`
+//! which is single-threaded despite the name. It now calls `matmul_int8_parallel`
+//! (rayon over output rows, NEON/AVX2 dot per thread) — matching what
+//! `TransformerBlockInt8::forward_cached_parallel` actually uses.
 //!
 //! Matrix sizes mirror real Llama-7B projection layers:
 //!   128  → L1-hot (warm-up / tiny batch)
@@ -14,15 +20,14 @@
 //!   1024 → LLC-pressure (realistic prefill slice)
 //!
 //! Throughput is reported as Gelem/s (2·M·K·N FLOPs per GEMM).
-//! Look at the "int8_speedup" group's ratio between `f32_parallel` and
-//! `int8_parallel` — that 4–5× number is the headline result of M4.
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 
 use llm_engine::ops::matmul::{
-    matmul_blocked, matmul_int8_from_f32, matmul_naive, matmul_parallel,
+    matmul_blocked, matmul_int8_from_f32, matmul_int8_parallel, matmul_naive, matmul_parallel,
 };
 use llm_engine::quant::int8::per_channel::{quantize_per_channel, QuantizedMatrix};
+use llm_engine::quant::int8::symmetric::quantize_symmetric;
 use llm_engine::tensor::Tensor;
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -79,17 +84,18 @@ fn bench_f32_progression(c: &mut Criterion) {
 
 // ── INT8 speedup ──────────────────────────────────────────────────────────────
 //
-// The headline result of Milestone 4: INT8 per-channel quantized weights
-// with f32 activations deliver a substantial throughput gain over f32 baseline.
+// Both kernels use rayon across output rows. The throughput difference is now
+// purely from INT8 memory bandwidth reduction (4× fewer bytes per weight),
+// not from one path being parallel and the other sequential.
 //
-// `f32_parallel`  — best f32 kernel (rayon-parallel, same as above)
-// `int8_parallel` — INT8 weights, f32 activations, rayon-parallel dot
+// `f32_parallel`  — NEON/AVX2 f32 per thread, rayon across rows
+// `int8_parallel` — NEON/AVX2 INT8 dot per thread, rayon across rows (commit 18.6 fix)
+// `int8_sequential` — single-threaded INT8 baseline (for comparison)
 //
-// On the Llama-7B projection shape (512 here as a scaled proxy) expect
-// 4–5× Gelem/s improvement; on the 1024 square expect up to 40× due to
-// the reduced memory bandwidth pressure of INT8.
-//
-// Both use identical matrix *shapes* so FLOPs are normalised the same way.
+// Expected on Apple M1 Pro at 512×512:
+//   f32_parallel  ≈ 140 Gelem/s  (NEON + 10 cores)
+//   int8_parallel ≈ 700 Gelem/s  (NEON INT8 + 10 cores — was hidden before fix)
+//   int8_sequential ≈ 98 Gelem/s (single-thread, what the old bench measured)
 
 fn bench_int8_speedup(c: &mut Criterion) {
     let mut group = c.benchmark_group("int8_speedup");
@@ -105,8 +111,18 @@ fn bench_int8_speedup(c: &mut Criterion) {
             bench.iter(|| matmul_parallel(&act, &w_f32).unwrap());
         });
 
-        group.bench_with_input(BenchmarkId::new("int8_parallel", size), &size, |bench, _| {
+        // INT8 sequential: single-threaded baseline — what the old bench measured.
+        group.bench_with_input(BenchmarkId::new("int8_sequential", size), &size, |bench, _| {
             bench.iter(|| matmul_int8_from_f32(&act, &w_int8).unwrap());
+        });
+
+        // INT8 parallel: quantize activations then dispatch to rayon+NEON/AVX2.
+        // This matches what TransformerBlockInt8::forward_cached_parallel uses.
+        group.bench_with_input(BenchmarkId::new("int8_parallel", size), &size, |bench, _| {
+            bench.iter(|| {
+                let (act_q, act_scale) = quantize_symmetric(act.as_slice());
+                matmul_int8_parallel(&act_q, act_scale, &w_int8, size).unwrap()
+            });
         });
     }
 

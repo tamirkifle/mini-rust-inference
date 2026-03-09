@@ -19,8 +19,9 @@
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 
-use llm_engine::ops::matmul::{matmul_blocked, matmul_int8_from_f32, matmul_naive, matmul_parallel};
+use llm_engine::ops::matmul::{matmul_blocked, matmul_int8_from_f32, matmul_int8_parallel, matmul_naive, matmul_parallel};
 use llm_engine::quant::int8::per_channel::{quantize_per_channel, QuantizedMatrix};
+use llm_engine::quant::int8::symmetric::quantize_symmetric;
 use llm_engine::tensor::Tensor;
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -87,11 +88,25 @@ fn bench_int8_matmul(c: &mut Criterion) {
         let flops = (2 * size * size * size) as u64;
         group.throughput(Throughput::Elements(flops));
 
+        // Sequential: single-threaded INT8 matmul (baseline).
         group.bench_with_input(
-            BenchmarkId::new("int8_from_f32", size),
+            BenchmarkId::new("int8_sequential", size),
             &size,
             |bench, _| {
                 bench.iter(|| matmul_int8_from_f32(&act, &wq).unwrap());
+            },
+        );
+
+        // Parallel: rayon over output rows, NEON/AVX2 dot per thread (commit 16.3).
+        // This is the kernel wired into TransformerBlockInt8::forward_cached_parallel.
+        group.bench_with_input(
+            BenchmarkId::new("int8_parallel", size),
+            &size,
+            |bench, _| {
+                bench.iter(|| {
+                    let (act_q, act_scale) = quantize_symmetric(act.as_slice());
+                    matmul_int8_parallel(&act_q, act_scale, &wq, size).unwrap()
+                });
             },
         );
     }
