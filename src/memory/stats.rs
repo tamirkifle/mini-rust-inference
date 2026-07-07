@@ -22,7 +22,7 @@
 //! let pool  = TensorPool::new();
 //! let arena = Arena::with_capacity(1 << 20); // 1 M floats = 4 MB
 //!
-//! let tracker = MemoryTracker::new(
+//! let mut tracker = MemoryTracker::new(
 //!     Some(13_000_000_000), // model mmap size
 //!     Some(512 * 1024 * 8 * 64 * 4 * 2), // KV-cache bytes
 //! );
