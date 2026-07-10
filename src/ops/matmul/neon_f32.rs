@@ -183,6 +183,7 @@ pub(crate) fn neon_gemm_slice(
 /// * `c_row` – `[n]` output row (overwritten)
 ///
 /// Uses NEON `vfmaq_f32` on aarch64; scalar axpy fallback elsewhere.
+#[allow(dead_code)]
 pub(crate) fn neon_gemm_row_slice(
     a_row: &[f32],
     b: &[f32],

@@ -7,6 +7,7 @@ use crate::model::{ModelError, Result};
 
 // ── token type constants (SentencePiece / GGUF convention) ──────────────────
 const TOKEN_TYPE_NORMAL:  i32 = 1;
+#[allow(dead_code)]
 const TOKEN_TYPE_UNKNOWN: i32 = 2;
 const TOKEN_TYPE_CONTROL: i32 = 3;
 const TOKEN_TYPE_BYTE:    i32 = 6;
