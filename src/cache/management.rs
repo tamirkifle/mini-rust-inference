@@ -18,7 +18,7 @@
 //! there, while the evicted suffix positions are zeroed to prevent stale data
 //! from leaking into future reads.
 
-use crate::cache::{KvCache, CachePosition};
+use crate::cache::{CachePosition, KvCache};
 use crate::tensor::{Result, TensorError};
 
 // ── reset ─────────────────────────────────────────────────────────────────────
@@ -52,17 +52,11 @@ pub fn cache_reset(cache: &mut KvCache, pos: &mut CachePosition) {
 /// # Errors
 ///
 /// [`TensorError::InvalidShape`] if `new_len > pos.current()`.
-pub fn cache_truncate(
-    cache:   &mut KvCache,
-    pos:     &mut CachePosition,
-    new_len: usize,
-) -> Result<()> {
+pub fn cache_truncate(cache: &mut KvCache, pos: &mut CachePosition, new_len: usize) -> Result<()> {
     let current = pos.current();
     if new_len > current {
         return Err(TensorError::InvalidShape {
-            reason: format!(
-                "cache_truncate: new_len {new_len} > current pos {current}"
-            ),
+            reason: format!("cache_truncate: new_len {new_len} > current pos {current}"),
         });
     }
 
@@ -80,15 +74,21 @@ pub fn cache_truncate(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cache::{KvCache, CachePosition};
+    use crate::cache::{CachePosition, KvCache};
 
-    fn filled_cache(n_layers: usize, n_tokens: usize, kv_dim_val: usize) -> (KvCache, CachePosition) {
+    fn filled_cache(
+        n_layers: usize,
+        n_tokens: usize,
+        kv_dim_val: usize,
+    ) -> (KvCache, CachePosition) {
         // kv_dim_val == n_kv_heads * head_dim; split arbitrarily as 1 head × kv_dim_val
         let mut cache = KvCache::new(n_layers, 64, 1, kv_dim_val);
-        let mut pos   = CachePosition::new(64);
+        let mut pos = CachePosition::new(64);
         for layer in 0..n_layers {
             for p in 0..n_tokens {
-                let row: Vec<f32> = (0..kv_dim_val).map(|i| (layer * 100 + p * 10 + i) as f32).collect();
+                let row: Vec<f32> = (0..kv_dim_val)
+                    .map(|i| (layer * 100 + p * 10 + i) as f32)
+                    .collect();
                 cache.write_k(layer, p, &row).unwrap();
                 cache.write_v(layer, p, &row).unwrap();
             }
@@ -106,8 +106,10 @@ mod tests {
         assert_eq!(pos.current(), 0);
         for layer in 0..2 {
             let k = cache.read_k(layer, 4).unwrap();
-            assert!(k.as_slice().iter().all(|&v| v == 0.0),
-                "layer {layer} K should be zeroed after reset");
+            assert!(
+                k.as_slice().iter().all(|&v| v == 0.0),
+                "layer {layer} K should be zeroed after reset"
+            );
         }
     }
 
@@ -141,8 +143,11 @@ mod tests {
         let k_before = cache.read_k(0, 3).unwrap();
         cache_truncate(&mut cache, &mut pos, 3).unwrap();
         let k_after = cache.read_k(0, 3).unwrap();
-        assert_eq!(k_before.as_slice(), k_after.as_slice(),
-            "prefix rows should be unchanged after truncation");
+        assert_eq!(
+            k_before.as_slice(),
+            k_after.as_slice(),
+            "prefix rows should be unchanged after truncation"
+        );
     }
 
     #[test]
@@ -155,8 +160,11 @@ mod tests {
         // We temporarily read 6 rows to inspect the suffix.
         let k = cache.read_k(0, 6).unwrap();
         let suffix = &k.as_slice()[3 * 4..6 * 4]; // rows 3, 4, 5
-        assert!(suffix.iter().all(|&v| v == 0.0),
-            "evicted rows should be zero after truncation, got {:?}", &suffix[..4]);
+        assert!(
+            suffix.iter().all(|&v| v == 0.0),
+            "evicted rows should be zero after truncation, got {:?}",
+            &suffix[..4]
+        );
     }
 
     #[test]

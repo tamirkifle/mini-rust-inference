@@ -430,7 +430,11 @@ pub fn f16_to_f32(h: u16) -> f32 {
         } else {
             // Subnormal: (-1)^sign * 2^(-14) * (mant/1024)
             let val = (mant as f32) * (1.0 / 1024.0) * (1.0 / 16384.0);
-            if sign == 1 { -val } else { val }
+            if sign == 1 {
+                -val
+            } else {
+                val
+            }
         }
     } else if exp == 31 {
         // Infinity or NaN
@@ -446,7 +450,11 @@ pub fn f16_to_f32(h: u16) -> f32 {
     } else {
         // Normalized: (-1)^sign * 2^(exp-15) * (1 + mant/1024)
         let val = (1.0 + (mant as f32) / 1024.0) * 2.0f32.powi(i32::from(exp) - 15);
-        if sign == 1 { -val } else { val }
+        if sign == 1 {
+            -val
+        } else {
+            val
+        }
     }
 }
 
@@ -608,10 +616,8 @@ mod tests {
             d: f32_to_f16(0.1),
             m: f32_to_f16(0.0),
             qs: [
-                0x10, 0x32, 0x54, 0x76,
-                0x98, 0xBA, 0xDC, 0xFE,
-                0x00, 0x00, 0x00, 0x00,
-                0x00, 0x00, 0x00, 0x00,
+                0x10, 0x32, 0x54, 0x76, 0x98, 0xBA, 0xDC, 0xFE, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00,
             ],
         };
 
@@ -627,10 +633,8 @@ mod tests {
         let block = BlockQ8_0 {
             d: f32_to_f16(0.5),
             qs: [
-                0, 1, 2, 3, 4, 5, 6, 7,
-                -8, -7, -6, -5, -4, -3, -2, -1,
-                0, 0, 0, 0, 0, 0, 0, 0,
-                0, 0, 0, 0, 0, 0, 0, 0,
+                0, 1, 2, 3, 4, 5, 6, 7, -8, -7, -6, -5, -4, -3, -2, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0,
             ],
         };
 

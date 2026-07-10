@@ -99,7 +99,10 @@ pub fn softmax_simd_dim(x: &Tensor<f32>, dim: usize) -> Result<Tensor<f32>> {
     }
     if dim >= x.ndim() {
         return Err(TensorError::InvalidShape {
-            reason: format!("softmax_simd: dim {dim} out of range for {}D tensor", x.ndim()),
+            reason: format!(
+                "softmax_simd: dim {dim} out of range for {}D tensor",
+                x.ndim()
+            ),
         });
     }
 
@@ -175,11 +178,15 @@ mod tests {
     use super::*;
     use crate::ops::softmax::{softmax, softmax_dim};
 
-    fn close(a: f32, b: f32) -> bool { (a - b).abs() < 1e-6 }
+    fn close(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-6
+    }
     fn close_slice(a: &[f32], b: &[f32]) -> bool {
         a.len() == b.len() && a.iter().zip(b).all(|(x, y)| close(*x, *y))
     }
-    fn sum_slice(s: &[f32]) -> f32 { s.iter().sum() }
+    fn sum_slice(s: &[f32]) -> f32 {
+        s.iter().sum()
+    }
 
     // ── matches scalar softmax ────────────────────────────────────────────
 
@@ -187,9 +194,13 @@ mod tests {
     fn test_simd_matches_scalar_1d() {
         let x = Tensor::from_vec(vec![1.0_f32, 2.0, 3.0, 4.0], vec![4]).unwrap();
         let scalar = softmax(&x).unwrap();
-        let simd   = softmax_simd(&x).unwrap();
-        assert!(close_slice(scalar.as_slice(), simd.as_slice()),
-            "scalar={:?}\nsimd={:?}", scalar.as_slice(), simd.as_slice());
+        let simd = softmax_simd(&x).unwrap();
+        assert!(
+            close_slice(scalar.as_slice(), simd.as_slice()),
+            "scalar={:?}\nsimd={:?}",
+            scalar.as_slice(),
+            simd.as_slice()
+        );
     }
 
     #[test]
@@ -197,18 +208,15 @@ mod tests {
         let data: Vec<f32> = (0..20).map(|i| i as f32 * 0.5 - 5.0).collect();
         let x = Tensor::from_vec(data, vec![4, 5]).unwrap();
         let scalar = softmax(&x).unwrap();
-        let simd   = softmax_simd(&x).unwrap();
+        let simd = softmax_simd(&x).unwrap();
         assert!(close_slice(scalar.as_slice(), simd.as_slice()));
     }
 
     #[test]
     fn test_simd_matches_scalar_3d() {
-        let x = Tensor::from_vec(
-            (0..24).map(|i| i as f32 * 0.1).collect(),
-            vec![2, 3, 4],
-        ).unwrap();
+        let x = Tensor::from_vec((0..24).map(|i| i as f32 * 0.1).collect(), vec![2, 3, 4]).unwrap();
         let scalar = softmax(&x).unwrap();
-        let simd   = softmax_simd(&x).unwrap();
+        let simd = softmax_simd(&x).unwrap();
         assert!(close_slice(scalar.as_slice(), simd.as_slice()));
     }
 
@@ -224,7 +232,7 @@ mod tests {
     #[test]
     fn test_simd_sums_to_one_each_row_2d() {
         let data: Vec<f32> = (0..12).map(|i| i as f32).collect();
-        let x   = Tensor::from_vec(data, vec![3, 4]).unwrap();
+        let x = Tensor::from_vec(data, vec![3, 4]).unwrap();
         let out = softmax_simd(&x).unwrap();
         for r in 0..3 {
             let s = sum_slice(&out.as_slice()[r * 4..(r + 1) * 4]);
@@ -238,7 +246,10 @@ mod tests {
     fn test_simd_large_logits_no_nan() {
         let x = Tensor::from_vec(vec![1000.0_f32, 1001.0, 1002.0], vec![3]).unwrap();
         let out = softmax_simd(&x).unwrap();
-        assert!(out.as_slice().iter().all(|v| !v.is_nan() && !v.is_infinite()));
+        assert!(out
+            .as_slice()
+            .iter()
+            .all(|v| !v.is_nan() && !v.is_infinite()));
         assert!(close(sum_slice(out.as_slice()), 1.0));
     }
 
@@ -256,7 +267,7 @@ mod tests {
     fn test_simd_dim_matches_scalar_dim() {
         let x = Tensor::from_vec(vec![1.0_f32, 2.0, 3.0, 4.0], vec![2, 2]).unwrap();
         let scalar = softmax_dim(&x, 0).unwrap();
-        let simd   = softmax_simd_dim(&x, 0).unwrap();
+        let simd = softmax_simd_dim(&x, 0).unwrap();
         assert!(close_slice(scalar.as_slice(), simd.as_slice()));
     }
 
@@ -265,9 +276,9 @@ mod tests {
     #[test]
     fn test_simd_inplace_matches_allocating() {
         let data: Vec<f32> = (0..8).map(|i| i as f32).collect();
-        let x_alloc  = Tensor::from_vec(data.clone(), vec![2, 4]).unwrap();
+        let x_alloc = Tensor::from_vec(data.clone(), vec![2, 4]).unwrap();
         let mut x_ip = Tensor::from_vec(data, vec![2, 4]).unwrap();
-        let alloc    = softmax_simd(&x_alloc).unwrap();
+        let alloc = softmax_simd(&x_alloc).unwrap();
         softmax_simd_inplace(&mut x_ip).unwrap();
         assert!(close_slice(alloc.as_slice(), x_ip.as_slice()));
     }

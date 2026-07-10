@@ -56,17 +56,18 @@ pub enum WeightRole {
 /// assert_eq!(weight_name(31, WeightRole::AttnNorm), "blk.31.attn_norm.weight");
 /// ```
 #[must_use]
-pub fn weight_name(layer: usize, role: WeightRole) -> String { // CHANGED
+pub fn weight_name(layer: usize, role: WeightRole) -> String {
+    // CHANGED
     let suffix = match role {
-        WeightRole::AttnQ      => "attn_q.weight",
-        WeightRole::AttnK      => "attn_k.weight",
-        WeightRole::AttnV      => "attn_v.weight",
+        WeightRole::AttnQ => "attn_q.weight",
+        WeightRole::AttnK => "attn_k.weight",
+        WeightRole::AttnV => "attn_v.weight",
         WeightRole::AttnOutput => "attn_output.weight",
-        WeightRole::AttnNorm   => "attn_norm.weight",
-        WeightRole::FfnNorm    => "ffn_norm.weight",
-        WeightRole::FfnGate    => "ffn_gate.weight",
-        WeightRole::FfnUp      => "ffn_up.weight",
-        WeightRole::FfnDown    => "ffn_down.weight",
+        WeightRole::AttnNorm => "attn_norm.weight",
+        WeightRole::FfnNorm => "ffn_norm.weight",
+        WeightRole::FfnGate => "ffn_gate.weight",
+        WeightRole::FfnUp => "ffn_up.weight",
+        WeightRole::FfnDown => "ffn_down.weight",
     };
     format!("blk.{layer}.{suffix}")
 }
@@ -95,11 +96,12 @@ pub enum GlobalWeightRole {
 /// assert_eq!(global_weight_name(GlobalWeightRole::Output),     "output.weight");
 /// ```
 #[must_use]
-pub fn global_weight_name(role: GlobalWeightRole) -> &'static str { // CHANGED
+pub fn global_weight_name(role: GlobalWeightRole) -> &'static str {
+    // CHANGED
     match role {
-        GlobalWeightRole::TokenEmbd  => "token_embd.weight",
+        GlobalWeightRole::TokenEmbd => "token_embd.weight",
         GlobalWeightRole::OutputNorm => "output_norm.weight",
-        GlobalWeightRole::Output     => "output.weight",
+        GlobalWeightRole::Output => "output.weight",
     }
 }
 
@@ -110,27 +112,42 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_weight_name_layer_0() { // CHANGED
-        assert_eq!(weight_name(0, WeightRole::AttnQ),      "blk.0.attn_q.weight");
-        assert_eq!(weight_name(0, WeightRole::AttnK),      "blk.0.attn_k.weight");
-        assert_eq!(weight_name(0, WeightRole::AttnV),      "blk.0.attn_v.weight");
-        assert_eq!(weight_name(0, WeightRole::AttnOutput), "blk.0.attn_output.weight");
-        assert_eq!(weight_name(0, WeightRole::AttnNorm),   "blk.0.attn_norm.weight");
-        assert_eq!(weight_name(0, WeightRole::FfnNorm),    "blk.0.ffn_norm.weight");
-        assert_eq!(weight_name(0, WeightRole::FfnGate),    "blk.0.ffn_gate.weight");
-        assert_eq!(weight_name(0, WeightRole::FfnUp),      "blk.0.ffn_up.weight");
-        assert_eq!(weight_name(0, WeightRole::FfnDown),    "blk.0.ffn_down.weight");
+    fn test_weight_name_layer_0() {
+        // CHANGED
+        assert_eq!(weight_name(0, WeightRole::AttnQ), "blk.0.attn_q.weight");
+        assert_eq!(weight_name(0, WeightRole::AttnK), "blk.0.attn_k.weight");
+        assert_eq!(weight_name(0, WeightRole::AttnV), "blk.0.attn_v.weight");
+        assert_eq!(
+            weight_name(0, WeightRole::AttnOutput),
+            "blk.0.attn_output.weight"
+        );
+        assert_eq!(
+            weight_name(0, WeightRole::AttnNorm),
+            "blk.0.attn_norm.weight"
+        );
+        assert_eq!(weight_name(0, WeightRole::FfnNorm), "blk.0.ffn_norm.weight");
+        assert_eq!(weight_name(0, WeightRole::FfnGate), "blk.0.ffn_gate.weight");
+        assert_eq!(weight_name(0, WeightRole::FfnUp), "blk.0.ffn_up.weight");
+        assert_eq!(weight_name(0, WeightRole::FfnDown), "blk.0.ffn_down.weight");
     }
 
     #[test]
-    fn test_weight_name_layer_31() { // CHANGED
-        assert_eq!(weight_name(31, WeightRole::AttnQ),    "blk.31.attn_q.weight");
-        assert_eq!(weight_name(31, WeightRole::FfnDown),  "blk.31.ffn_down.weight");
-        assert_eq!(weight_name(31, WeightRole::AttnNorm), "blk.31.attn_norm.weight");
+    fn test_weight_name_layer_31() {
+        // CHANGED
+        assert_eq!(weight_name(31, WeightRole::AttnQ), "blk.31.attn_q.weight");
+        assert_eq!(
+            weight_name(31, WeightRole::FfnDown),
+            "blk.31.ffn_down.weight"
+        );
+        assert_eq!(
+            weight_name(31, WeightRole::AttnNorm),
+            "blk.31.attn_norm.weight"
+        );
     }
 
     #[test]
-    fn test_weight_name_arbitrary_layer() { // CHANGED
+    fn test_weight_name_arbitrary_layer() {
+        // CHANGED
         for layer in [0, 1, 7, 15, 31, 63, 100] {
             let name = weight_name(layer, WeightRole::AttnQ);
             assert!(name.starts_with(&format!("blk.{layer}.")));
@@ -139,21 +156,42 @@ mod tests {
     }
 
     #[test]
-    fn test_global_weight_names() { // CHANGED
-        assert_eq!(global_weight_name(GlobalWeightRole::TokenEmbd),  "token_embd.weight");
-        assert_eq!(global_weight_name(GlobalWeightRole::OutputNorm), "output_norm.weight");
-        assert_eq!(global_weight_name(GlobalWeightRole::Output),     "output.weight");
+    fn test_global_weight_names() {
+        // CHANGED
+        assert_eq!(
+            global_weight_name(GlobalWeightRole::TokenEmbd),
+            "token_embd.weight"
+        );
+        assert_eq!(
+            global_weight_name(GlobalWeightRole::OutputNorm),
+            "output_norm.weight"
+        );
+        assert_eq!(
+            global_weight_name(GlobalWeightRole::Output),
+            "output.weight"
+        );
     }
 
     #[test]
-    fn test_weight_name_round_trip() { // CHANGED: each role produces a unique name at the same layer
+    fn test_weight_name_round_trip() {
+        // CHANGED: each role produces a unique name at the same layer
         use std::collections::HashSet;
         let roles = [
-            WeightRole::AttnQ, WeightRole::AttnK, WeightRole::AttnV,
-            WeightRole::AttnOutput, WeightRole::AttnNorm, WeightRole::FfnNorm,
-            WeightRole::FfnGate, WeightRole::FfnUp, WeightRole::FfnDown,
+            WeightRole::AttnQ,
+            WeightRole::AttnK,
+            WeightRole::AttnV,
+            WeightRole::AttnOutput,
+            WeightRole::AttnNorm,
+            WeightRole::FfnNorm,
+            WeightRole::FfnGate,
+            WeightRole::FfnUp,
+            WeightRole::FfnDown,
         ];
         let names: HashSet<String> = roles.iter().map(|&r| weight_name(0, r)).collect();
-        assert_eq!(names.len(), roles.len(), "all roles must produce distinct names");
+        assert_eq!(
+            names.len(),
+            roles.len(),
+            "all roles must produce distinct names"
+        );
     }
 }

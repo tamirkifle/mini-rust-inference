@@ -28,21 +28,22 @@
 //!   Incremental decode with `start_pos > 0` will be enabled in commit 9.x
 //!   once the KV-cache is implemented.
 
-use crate::gguf::{GgufLoader, TensorExtractor};
-use crate::model::{Result, ModelError};
 use crate::cache::KvCache;
+use crate::gguf::{GgufLoader, TensorExtractor};
 use crate::model::llama::{
+    weights::{global_weight_name, weight_name, GlobalWeightRole, WeightRole},
     LlamaConfig, TransformerBlock,
-    weights::{WeightRole, GlobalWeightRole, weight_name, global_weight_name},
 };
-use crate::ops::{norm::rmsnorm, matmul::matmul_blocked};
+use crate::model::{ModelError, Result};
 use crate::ops::rope::RopeTable;
+use crate::ops::{matmul::matmul_blocked, norm::rmsnorm};
 use crate::tensor::Tensor;
 
 // ── LlamaModel ───────────────────────────────────────────────────────────────
 
 /// Full Llama model: embedding + N transformer blocks + final norm + unembedding.
-pub struct LlamaModel { // CHANGED
+pub struct LlamaModel {
+    // CHANGED
     config: LlamaConfig,
     /// Token embedding table: `[vocab_size, embed_dim]`
     token_embd: Tensor<f32>,
@@ -59,33 +60,48 @@ impl LlamaModel {
     ///
     /// Used in unit tests and custom loading pipelines.
     #[must_use]
-    pub fn new( // CHANGED
+    pub fn new(
+        // CHANGED
         config: LlamaConfig,
         token_embd: Tensor<f32>,
         blocks: Vec<TransformerBlock>,
         output_norm: Tensor<f32>,
         output: Tensor<f32>,
     ) -> Self {
-        Self { config, token_embd, blocks, output_norm, output }
+        Self {
+            config,
+            token_embd,
+            blocks,
+            output_norm,
+            output,
+        }
     }
 
     /// Return the model configuration.
     #[must_use]
-    pub fn config(&self) -> &LlamaConfig { &self.config }
+    pub fn config(&self) -> &LlamaConfig {
+        &self.config
+    }
 
     // ── accessors used by ChunkedPrefill ──────────────────────────────────
 
     /// Slice of transformer blocks (one per layer).
     #[must_use]
-    pub fn blocks(&self) -> &[TransformerBlock] { &self.blocks }
+    pub fn blocks(&self) -> &[TransformerBlock] {
+        &self.blocks
+    }
 
     /// Final RMSNorm scale vector `[embed_dim]`.
     #[must_use]
-    pub fn output_norm(&self) -> &Tensor<f32> { &self.output_norm }
+    pub fn output_norm(&self) -> &Tensor<f32> {
+        &self.output_norm
+    }
 
     /// Unembedding matrix `[vocab_size, embed_dim]`.
     #[must_use]
-    pub fn output_weight(&self) -> &Tensor<f32> { &self.output }
+    pub fn output_weight(&self) -> &Tensor<f32> {
+        &self.output
+    }
 
     /// Embed a slice of token IDs into `[seq, embed_dim]`.
     ///
@@ -108,17 +124,18 @@ impl LlamaModel {
     /// Returns [`ModelError::LoadError`] if any tensor is missing or unreadable,
     /// or [`ModelError::MissingMetadataKey`] / [`ModelError::InvalidConfig`]
     /// if the metadata is incomplete.
-    pub fn from_loader(loader: &GgufLoader) -> Result<Self> { // CHANGED
+    pub fn from_loader(loader: &GgufLoader) -> Result<Self> {
+        // CHANGED
         let config = LlamaConfig::from_metadata(loader.metadata())?;
         let ex = TensorExtractor::new(loader);
 
         // ── global weights ─────────────────────────────────────────────────
-        let token_embd  = ex.extract(global_weight_name(GlobalWeightRole::TokenEmbd))?;
+        let token_embd = ex.extract(global_weight_name(GlobalWeightRole::TokenEmbd))?;
         let output_norm = ex.extract(global_weight_name(GlobalWeightRole::OutputNorm))?;
-        let output      = ex.extract(global_weight_name(GlobalWeightRole::Output))?;
+        let output = ex.extract(global_weight_name(GlobalWeightRole::Output))?;
 
         // ── shared RoPE table ──────────────────────────────────────────────
-        let head_dim   = config.head_dim() as usize;
+        let head_dim = config.head_dim() as usize;
         let rope_table = RopeTable::new(
             config.context_length as usize,
             head_dim,
@@ -128,20 +145,28 @@ impl LlamaModel {
         // ── per-layer blocks ───────────────────────────────────────────────
         let mut blocks = Vec::with_capacity(config.block_count as usize);
         for layer in 0..config.block_count as usize {
-            let wq        = ex.extract(&weight_name(layer, WeightRole::AttnQ))?;
-            let wk        = ex.extract(&weight_name(layer, WeightRole::AttnK))?;
-            let wv        = ex.extract(&weight_name(layer, WeightRole::AttnV))?;
-            let wo        = ex.extract(&weight_name(layer, WeightRole::AttnOutput))?;
+            let wq = ex.extract(&weight_name(layer, WeightRole::AttnQ))?;
+            let wk = ex.extract(&weight_name(layer, WeightRole::AttnK))?;
+            let wv = ex.extract(&weight_name(layer, WeightRole::AttnV))?;
+            let wo = ex.extract(&weight_name(layer, WeightRole::AttnOutput))?;
             let attn_norm = ex.extract(&weight_name(layer, WeightRole::AttnNorm))?;
-            let wgate     = ex.extract(&weight_name(layer, WeightRole::FfnGate))?;
-            let wup       = ex.extract(&weight_name(layer, WeightRole::FfnUp))?;
-            let wdown     = ex.extract(&weight_name(layer, WeightRole::FfnDown))?;
-            let ffn_norm  = ex.extract(&weight_name(layer, WeightRole::FfnNorm))?;
+            let wgate = ex.extract(&weight_name(layer, WeightRole::FfnGate))?;
+            let wup = ex.extract(&weight_name(layer, WeightRole::FfnUp))?;
+            let wdown = ex.extract(&weight_name(layer, WeightRole::FfnDown))?;
+            let ffn_norm = ex.extract(&weight_name(layer, WeightRole::FfnNorm))?;
             blocks.push(TransformerBlock::new(
-                wq, wk, wv, wo, attn_norm,
-                wgate, wup, wdown, ffn_norm,
+                wq,
+                wk,
+                wv,
+                wo,
+                attn_norm,
+                wgate,
+                wup,
+                wdown,
+                ffn_norm,
                 rope_table.clone(), // CHANGED: clone per block
-                config.n_heads as usize, config.n_kv_heads as usize,
+                config.n_heads as usize,
+                config.n_kv_heads as usize,
                 config.rms_norm_eps,
             ));
         }
@@ -162,7 +187,8 @@ impl LlamaModel {
     /// # Errors
     ///
     /// Returns [`ModelError`] on out-of-range token IDs or tensor shape failures.
-    pub fn forward(&self, tokens: &[u32]) -> Result<Tensor<f32>> { // CHANGED
+    pub fn forward(&self, tokens: &[u32]) -> Result<Tensor<f32>> {
+        // CHANGED
         if tokens.is_empty() {
             return Err(ModelError::InvalidConfig {
                 reason: "forward: token list must not be empty".to_string(),
@@ -182,7 +208,7 @@ impl LlamaModel {
 
         // 4. Logits: x @ output.T  →  [seq, vocab_size]
         let output_t = self.output.transpose(0, 1)?.contiguous(); // CHANGED
-        let logits = matmul_blocked(&x, &output_t)?;              // CHANGED
+        let logits = matmul_blocked(&x, &output_t)?; // CHANGED
         Ok(logits)
     }
 
@@ -206,12 +232,7 @@ impl LlamaModel {
     ///
     /// Returns [`ModelError`] on out-of-range token ID, cache overflow, or
     /// any tensor shape failure.
-    pub fn forward_decode(
-        &self,
-        token: u32,
-        pos:   usize,
-        cache: &mut KvCache,
-    ) -> Result<Vec<f32>> {
+    pub fn forward_decode(&self, token: u32, pos: usize, cache: &mut KvCache) -> Result<Vec<f32>> {
         // 1. Embed the single token → [1, embed_dim]
         let mut x = self.embed_tokens(&[token])?;
 
@@ -225,16 +246,17 @@ impl LlamaModel {
 
         // 4. Unembedding: x @ output.T → [1, vocab_size]
         let output_t = self.output.transpose(0, 1)?.contiguous();
-        let logits   = matmul_blocked(&x, &output_t)?;
+        let logits = matmul_blocked(&x, &output_t)?;
 
         Ok(logits.as_slice().to_vec())
     }
 }
 
 /// Gather token embedding rows: `[vocab, embed] → [seq, embed]`.
-fn embed(token_embd: &Tensor<f32>, tokens: &[u32]) -> Result<Tensor<f32>> { // CHANGED
+fn embed(token_embd: &Tensor<f32>, tokens: &[u32]) -> Result<Tensor<f32>> {
+    // CHANGED
     let vocab_size = token_embd.dims()[0];
-    let embed_dim  = token_embd.dims()[1];
+    let embed_dim = token_embd.dims()[1];
     let data = token_embd.as_slice(); // contiguous (extracted from GGUF)
     let mut out = Vec::with_capacity(tokens.len() * embed_dim);
     for &tok in tokens {
@@ -256,52 +278,58 @@ fn embed(token_embd: &Tensor<f32>, tokens: &[u32]) -> Result<Tensor<f32>> { // C
 mod tests {
     use super::*;
     use crate::cache::KvCache;
-    use crate::model::llama::{config::LlamaConfig, block::TransformerBlock};
-    use crate::ops::rope::RopeTable;
-    use crate::gguf::MetadataValue;
     use crate::gguf::Metadata;
+    use crate::gguf::MetadataValue;
+    use crate::model::llama::{block::TransformerBlock, config::LlamaConfig};
+    use crate::ops::rope::RopeTable;
 
     /// Minimal config for a tiny synthetic model.
     fn tiny_config() -> LlamaConfig {
         let mut m = Metadata::new();
         for (k, v) in [
-            ("llama.block_count",          MetadataValue::Uint32(2)),
-            ("llama.embedding_length",     MetadataValue::Uint32(8)),
+            ("llama.block_count", MetadataValue::Uint32(2)),
+            ("llama.embedding_length", MetadataValue::Uint32(8)),
             ("llama.attention.head_count", MetadataValue::Uint32(2)),
-            ("llama.feed_forward_length",  MetadataValue::Uint32(16)),
-            ("llama.context_length",       MetadataValue::Uint32(64)),
-            ("llama.vocab_size",           MetadataValue::Uint32(32)),
-        ] { m.insert(k.to_string(), v); }
+            ("llama.feed_forward_length", MetadataValue::Uint32(16)),
+            ("llama.context_length", MetadataValue::Uint32(64)),
+            ("llama.vocab_size", MetadataValue::Uint32(32)),
+        ] {
+            m.insert(k.to_string(), v);
+        }
         LlamaConfig::from_metadata(&m).unwrap()
     }
 
     /// Build a `LlamaModel` with all-zero weights for shape/smoke tests.
     fn make_model(cfg: &LlamaConfig) -> LlamaModel {
-        let embed  = cfg.embedding_length as usize;
-        let vocab  = cfg.vocab_size       as usize;
-        let ffn    = cfg.feed_forward_length as usize;
-        let heads  = cfg.n_heads          as usize;
-        let kv     = cfg.n_kv_heads       as usize;
-        let hd     = cfg.head_dim()       as usize;
-        let qd     = heads * hd;
-        let kvd    = kv   * hd;
+        let embed = cfg.embedding_length as usize;
+        let vocab = cfg.vocab_size as usize;
+        let ffn = cfg.feed_forward_length as usize;
+        let heads = cfg.n_heads as usize;
+        let kv = cfg.n_kv_heads as usize;
+        let hd = cfg.head_dim() as usize;
+        let qd = heads * hd;
+        let kvd = kv * hd;
 
         let rope = RopeTable::new(cfg.context_length as usize, hd, cfg.rope_freq_base);
-        let blocks: Vec<_> = (0..cfg.block_count as usize).map(|_| {
-            TransformerBlock::new(
-                Tensor::zeros(vec![qd,    embed]),
-                Tensor::zeros(vec![kvd,   embed]),
-                Tensor::zeros(vec![kvd,   embed]),
-                Tensor::zeros(vec![embed, qd   ]),
-                Tensor::ones(vec![embed]),
-                Tensor::zeros(vec![ffn,   embed]),
-                Tensor::zeros(vec![ffn,   embed]),
-                Tensor::zeros(vec![embed, ffn  ]),
-                Tensor::ones(vec![embed]),
-                rope.clone(),
-                heads, kv, cfg.rms_norm_eps,
-            )
-        }).collect();
+        let blocks: Vec<_> = (0..cfg.block_count as usize)
+            .map(|_| {
+                TransformerBlock::new(
+                    Tensor::zeros(vec![qd, embed]),
+                    Tensor::zeros(vec![kvd, embed]),
+                    Tensor::zeros(vec![kvd, embed]),
+                    Tensor::zeros(vec![embed, qd]),
+                    Tensor::ones(vec![embed]),
+                    Tensor::zeros(vec![ffn, embed]),
+                    Tensor::zeros(vec![ffn, embed]),
+                    Tensor::zeros(vec![embed, ffn]),
+                    Tensor::ones(vec![embed]),
+                    rope.clone(),
+                    heads,
+                    kv,
+                    cfg.rms_norm_eps,
+                )
+            })
+            .collect();
 
         LlamaModel::new(
             cfg.clone(),
@@ -313,69 +341,80 @@ mod tests {
     }
 
     #[test]
-    fn test_forward_single_token_output_shape() { // CHANGED
-        let cfg   = tiny_config();
+    fn test_forward_single_token_output_shape() {
+        // CHANGED
+        let cfg = tiny_config();
         let vocab = cfg.vocab_size as usize;
         let model = make_model(&cfg);
-        let out   = model.forward(&[0]).unwrap();
+        let out = model.forward(&[0]).unwrap();
         assert_eq!(out.dims(), &[1, vocab]);
     }
 
     #[test]
-    fn test_forward_multi_token_output_shape() { // CHANGED
-        let cfg   = tiny_config();
+    fn test_forward_multi_token_output_shape() {
+        // CHANGED
+        let cfg = tiny_config();
         let vocab = cfg.vocab_size as usize;
         let model = make_model(&cfg);
-        let out   = model.forward(&[0, 1, 2, 3]).unwrap();
+        let out = model.forward(&[0, 1, 2, 3]).unwrap();
         assert_eq!(out.dims(), &[4, vocab]);
     }
 
     #[test]
-    fn test_forward_no_nan_or_inf() { // CHANGED
-        let cfg   = tiny_config();
+    fn test_forward_no_nan_or_inf() {
+        // CHANGED
+        let cfg = tiny_config();
         let model = make_model(&cfg);
-        let out   = model.forward(&[0, 5, 31]).unwrap();
+        let out = model.forward(&[0, 5, 31]).unwrap();
         for &v in out.as_slice() {
-            assert!(!v.is_nan(),      "NaN in logits");
+            assert!(!v.is_nan(), "NaN in logits");
             assert!(!v.is_infinite(), "Inf in logits");
         }
     }
 
     #[test]
-    fn test_forward_empty_tokens_rejected() { // CHANGED
-        let cfg   = tiny_config();
+    fn test_forward_empty_tokens_rejected() {
+        // CHANGED
+        let cfg = tiny_config();
         let model = make_model(&cfg);
         assert!(model.forward(&[]).is_err());
     }
 
     #[test]
-    fn test_forward_out_of_range_token_rejected() { // CHANGED
-        let cfg   = tiny_config();
+    fn test_forward_out_of_range_token_rejected() {
+        // CHANGED
+        let cfg = tiny_config();
         let model = make_model(&cfg);
         // vocab_size = 32, so token 32 is out of range
         assert!(model.forward(&[32]).is_err());
     }
 
     #[test]
-    fn test_embed_gathers_correct_rows() { // CHANGED
+    fn test_embed_gathers_correct_rows() {
+        // CHANGED
         // Build a token_embd where row i is filled with i as f32
         let vocab = 4_usize;
-        let dim   = 3_usize;
+        let dim = 3_usize;
         let data: Vec<f32> = (0..vocab).flat_map(|i| vec![i as f32; dim]).collect();
         let token_embd = Tensor::from_vec(data, vec![vocab, dim]).unwrap();
         let out = embed(&token_embd, &[2, 0, 3]).unwrap();
         assert_eq!(out.dims(), &[3, dim]);
         // row 0 of out should be all 2.0
-        assert!(out.as_slice()[..dim].iter().all(|&v: &f32| (v - 2.0).abs() < 1e-7));
+        assert!(out.as_slice()[..dim]
+            .iter()
+            .all(|&v: &f32| (v - 2.0).abs() < 1e-7));
         // row 1 should be all 0.0
-        assert!(out.as_slice()[dim..2*dim].iter().all(|&v: &f32| v == 0.0));
+        assert!(out.as_slice()[dim..2 * dim].iter().all(|&v: &f32| v == 0.0));
         // row 2 should be all 3.0
-        assert!(out.as_slice()[2*dim..].iter().all(|&v: &f32| (v - 3.0).abs() < 1e-7));
+        assert!(out.as_slice()[2 * dim..]
+            .iter()
+            .all(|&v: &f32| (v - 3.0).abs() < 1e-7));
     }
 
     #[test]
-    fn test_config_accessor() { // CHANGED
-        let cfg   = tiny_config();
+    fn test_config_accessor() {
+        // CHANGED
+        let cfg = tiny_config();
         let model = make_model(&cfg);
         assert_eq!(model.config().block_count, 2);
         assert_eq!(model.config().vocab_size, 32);
@@ -385,28 +424,28 @@ mod tests {
 
     #[test]
     fn test_forward_decode_output_length() {
-        let cfg   = tiny_config();
+        let cfg = tiny_config();
         let vocab = cfg.vocab_size as usize;
         let model = make_model(&cfg);
-        let n_layers   = cfg.block_count as usize;
+        let n_layers = cfg.block_count as usize;
         let n_kv_heads = cfg.n_kv_heads as usize;
-        let head_dim   = cfg.head_dim() as usize;
-        let mut cache  = KvCache::new(n_layers, cfg.context_length as usize, n_kv_heads, head_dim);
+        let head_dim = cfg.head_dim() as usize;
+        let mut cache = KvCache::new(n_layers, cfg.context_length as usize, n_kv_heads, head_dim);
         let logits = model.forward_decode(0, 0, &mut cache).unwrap();
         assert_eq!(logits.len(), vocab);
     }
 
     #[test]
     fn test_forward_decode_no_nan() {
-        let cfg   = tiny_config();
+        let cfg = tiny_config();
         let model = make_model(&cfg);
-        let n_layers   = cfg.block_count as usize;
+        let n_layers = cfg.block_count as usize;
         let n_kv_heads = cfg.n_kv_heads as usize;
-        let head_dim   = cfg.head_dim() as usize;
-        let mut cache  = KvCache::new(n_layers, cfg.context_length as usize, n_kv_heads, head_dim);
+        let head_dim = cfg.head_dim() as usize;
+        let mut cache = KvCache::new(n_layers, cfg.context_length as usize, n_kv_heads, head_dim);
         let logits = model.forward_decode(5, 0, &mut cache).unwrap();
         for (i, &v) in logits.iter().enumerate() {
-            assert!(!v.is_nan(),      "NaN in decode logits[{i}]");
+            assert!(!v.is_nan(), "NaN in decode logits[{i}]");
             assert!(!v.is_infinite(), "Inf in decode logits[{i}]");
         }
     }
@@ -415,21 +454,20 @@ mod tests {
     /// logits as the first (and only) row of `forward(&[token])`.
     #[test]
     fn test_forward_decode_matches_forward_single_token() {
-        let cfg   = tiny_config();
+        let cfg = tiny_config();
         let vocab = cfg.vocab_size as usize;
         let model = make_model(&cfg);
-        let n_layers   = cfg.block_count as usize;
+        let n_layers = cfg.block_count as usize;
         let n_kv_heads = cfg.n_kv_heads as usize;
-        let head_dim   = cfg.head_dim() as usize;
+        let head_dim = cfg.head_dim() as usize;
 
         let logits_full = model.forward(&[5]).unwrap();
-        let mut cache   = KvCache::new(n_layers, cfg.context_length as usize, n_kv_heads, head_dim);
-        let logits_dec  = model.forward_decode(5, 0, &mut cache).unwrap();
+        let mut cache = KvCache::new(n_layers, cfg.context_length as usize, n_kv_heads, head_dim);
+        let logits_dec = model.forward_decode(5, 0, &mut cache).unwrap();
 
         assert_eq!(logits_dec.len(), vocab);
         for (i, (&d, &f)) in logits_dec.iter().zip(logits_full.as_slice()).enumerate() {
-            assert!((d - f).abs() < 1e-4,
-                "logit[{i}]: decode={d} forward={f}");
+            assert!((d - f).abs() < 1e-4, "logit[{i}]: decode={d} forward={f}");
         }
     }
 }

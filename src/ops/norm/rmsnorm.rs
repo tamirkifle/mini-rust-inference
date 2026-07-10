@@ -72,9 +72,7 @@ pub fn rmsnorm(x: &Tensor<f32>, weight: &Tensor<f32>, eps: f32) -> Result<Tensor
     let x_last_dim = x.dims()[x.ndim() - 1];
     if x_last_dim != d {
         return Err(TensorError::InvalidShape {
-            reason: format!(
-                "rmsnorm: last dim of x ({x_last_dim}) != weight length ({d})"
-            ),
+            reason: format!("rmsnorm: last dim of x ({x_last_dim}) != weight length ({d})"),
         });
     }
 
@@ -101,7 +99,7 @@ pub fn rmsnorm(x: &Tensor<f32>, weight: &Tensor<f32>, eps: f32) -> Result<Tensor
 
     for row in 0..n_rows {
         let start = row * d;
-        let end   = start + d;
+        let end = start + d;
         let slice = &x_data[start..end];
 
         // RMS: sqrt( mean(x²) + ε )
@@ -151,9 +149,7 @@ pub fn rmsnorm_inplace(x: &mut Tensor<f32>, weight: &Tensor<f32>, eps: f32) -> R
     let x_last_dim = x.dims()[x.ndim() - 1];
     if x_last_dim != d {
         return Err(TensorError::InvalidShape {
-            reason: format!(
-                "rmsnorm_inplace: last dim of x ({x_last_dim}) != weight length ({d})"
-            ),
+            reason: format!("rmsnorm_inplace: last dim of x ({x_last_dim}) != weight length ({d})"),
         });
     }
 
@@ -176,7 +172,7 @@ pub fn rmsnorm_inplace(x: &mut Tensor<f32>, weight: &Tensor<f32>, eps: f32) -> R
 
     for row in 0..n_rows {
         let start = row * d;
-        let end   = start + d;
+        let end = start + d;
         let slice = &x_data[start..end];
 
         let mean_sq: f32 = slice.iter().map(|v| v * v).sum::<f32>() / d as f32;
@@ -199,7 +195,9 @@ mod tests {
 
     const EPS: f32 = 1e-5;
 
-    fn close(a: f32, b: f32, tol: f32) -> bool { (a - b).abs() < tol }
+    fn close(a: f32, b: f32, tol: f32) -> bool {
+        (a - b).abs() < tol
+    }
     fn close_slice(a: &[f32], b: &[f32], tol: f32) -> bool {
         a.len() == b.len() && a.iter().zip(b).all(|(x, y)| close(*x, *y, tol))
     }
@@ -237,7 +235,8 @@ mod tests {
         let x = Tensor::from_vec(
             (0..(seq * d)).map(|i| i as f32 * 0.1 + 0.1).collect(),
             vec![seq, d],
-        ).unwrap();
+        )
+        .unwrap();
         let w = Tensor::ones(vec![d]);
         let out = rmsnorm(&x, &w, EPS).unwrap();
         assert_eq!(out.dims(), x.dims());
@@ -249,7 +248,8 @@ mod tests {
         let x = Tensor::from_vec(
             (0..(batch * seq * d)).map(|i| i as f32 + 1.0).collect(),
             vec![batch, seq, d],
-        ).unwrap();
+        )
+        .unwrap();
         let w = Tensor::ones(vec![d]);
         let out = rmsnorm(&x, &w, EPS).unwrap();
         assert_eq!(out.dims(), x.dims());
@@ -339,7 +339,7 @@ mod tests {
     #[test]
     fn test_rmsnorm_inplace_matches_allocating() {
         let data = vec![1.0_f32, 2.0, 3.0, 4.0, 5.0, 6.0];
-        let w    = Tensor::from_vec(vec![1.0_f32, 0.5, 2.0], vec![3]).unwrap();
+        let w = Tensor::from_vec(vec![1.0_f32, 0.5, 2.0], vec![3]).unwrap();
 
         let x_alloc = Tensor::from_vec(data.clone(), vec![2, 3]).unwrap();
         let mut x_ip = Tensor::from_vec(data, vec![2, 3]).unwrap();
@@ -400,10 +400,13 @@ mod tests {
         // CHANGED: transpose makes x non-contiguous; rmsnorm must still work
         let data = vec![1.0_f32, 2.0, 3.0, 4.0];
         let x_orig = Tensor::from_vec(data, vec![2, 2]).unwrap();
-        let x_t    = x_orig.transpose(0, 1).unwrap(); // shape [2,2], strided
-        let w      = Tensor::ones(vec![2]);
-        let out    = rmsnorm(&x_t, &w, EPS);
-        assert!(out.is_ok(), "rmsnorm on non-contiguous input must not panic");
+        let x_t = x_orig.transpose(0, 1).unwrap(); // shape [2,2], strided
+        let w = Tensor::ones(vec![2]);
+        let out = rmsnorm(&x_t, &w, EPS);
+        assert!(
+            out.is_ok(),
+            "rmsnorm on non-contiguous input must not panic"
+        );
         assert_eq!(out.unwrap().dims(), &[2, 2]);
     }
 }

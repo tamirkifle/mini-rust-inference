@@ -167,8 +167,7 @@ impl<T: Clone> TensorView<'_, T> {
         } else {
             // Copy in logical order for non-contiguous views
             let data = self.to_contiguous_vec();
-            Tensor::from_vec(data, self.shape().clone())
-                .expect("collected data should match shape")
+            Tensor::from_vec(data, self.shape().clone()).expect("collected data should match shape")
         }
     }
 

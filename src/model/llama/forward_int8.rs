@@ -30,11 +30,11 @@ use crate::attention::cached::{cached_attention_decode, cached_attention_prefill
 use crate::attention::gqa::grouped_query_attention_causal_with_offset;
 use crate::cache::KvCache;
 use crate::gguf::{GgufLoader, TensorExtractor};
-use crate::model::{ModelError, Result};
 use crate::model::llama::{
+    weights::{global_weight_name, weight_name, GlobalWeightRole, WeightRole},
     LlamaConfig,
-    weights::{GlobalWeightRole, WeightRole, global_weight_name, weight_name},
 };
+use crate::model::{ModelError, Result};
 use crate::ops::activation::swiglu;
 use crate::ops::matmul::matmul_int8_from_f32;
 use crate::ops::matmul::matmul_int8_parallel;
@@ -52,7 +52,7 @@ use crate::tensor::Tensor;
 fn quantize_tensor(t: &Tensor<f32>) -> QuantizedMatrix {
     debug_assert_eq!(t.ndim(), 2, "quantize_tensor: expected 2-D weight");
     let n_out = t.dims()[0];
-    let k_in  = t.dims()[1];
+    let k_in = t.dims()[1];
     let slice: Cow<[f32]> = if t.is_contiguous() {
         Cow::Borrowed(t.as_slice())
     } else {
@@ -102,14 +102,20 @@ fn add_elementwise(a: &Tensor<f32>, b: &Tensor<f32>) -> Result<Tensor<f32>> {
         return Err(ModelError::TensorError(
             crate::tensor::TensorError::ShapeMismatch {
                 expected: a.dims().to_vec(),
-                got:      b.dims().to_vec(),
+                got: b.dims().to_vec(),
             },
         ));
     }
-    let a_d: Cow<[f32]> = if a.is_contiguous() { Cow::Borrowed(a.as_slice()) }
-                          else { Cow::Owned(a.contiguous().as_slice().to_vec()) };
-    let b_d: Cow<[f32]> = if b.is_contiguous() { Cow::Borrowed(b.as_slice()) }
-                          else { Cow::Owned(b.contiguous().as_slice().to_vec()) };
+    let a_d: Cow<[f32]> = if a.is_contiguous() {
+        Cow::Borrowed(a.as_slice())
+    } else {
+        Cow::Owned(a.contiguous().as_slice().to_vec())
+    };
+    let b_d: Cow<[f32]> = if b.is_contiguous() {
+        Cow::Borrowed(b.as_slice())
+    } else {
+        Cow::Owned(b.contiguous().as_slice().to_vec())
+    };
     let out: Vec<f32> = a_d.iter().zip(b_d.iter()).map(|(x, y)| x + y).collect();
     Ok(Tensor::from_vec(out, a.shape().clone())?)
 }
@@ -118,8 +124,8 @@ fn add_elementwise(a: &Tensor<f32>, b: &Tensor<f32>) -> Result<Tensor<f32>> {
 
 fn embed(token_embd: &Tensor<f32>, tokens: &[u32]) -> Result<Tensor<f32>> {
     let vocab = token_embd.dims()[0];
-    let dim   = token_embd.dims()[1];
-    let data  = token_embd.as_slice();
+    let dim = token_embd.dims()[1];
+    let data = token_embd.as_slice();
     let mut out = Vec::with_capacity(tokens.len() * dim);
     for &tok in tokens {
         let id = tok as usize;
@@ -140,18 +146,18 @@ fn embed(token_embd: &Tensor<f32>, tokens: &[u32]) -> Result<Tensor<f32>> {
 /// All seven weight matrices (wq, wk, wv, wo, wgate, wup, wdown) are stored as
 /// [`QuantizedMatrix`]; norm scales and RoPE table remain in f32.
 pub struct TransformerBlockInt8 {
-    wq:    QuantizedMatrix,
-    wk:    QuantizedMatrix,
-    wv:    QuantizedMatrix,
-    wo:    QuantizedMatrix,
-    attn_norm:   Tensor<f32>,
+    wq: QuantizedMatrix,
+    wk: QuantizedMatrix,
+    wv: QuantizedMatrix,
+    wo: QuantizedMatrix,
+    attn_norm: Tensor<f32>,
     wgate: QuantizedMatrix,
-    wup:   QuantizedMatrix,
+    wup: QuantizedMatrix,
     wdown: QuantizedMatrix,
-    ffn_norm:    Tensor<f32>,
-    rope_table:  RopeTable,
-    n_heads:     usize,
-    n_kv_heads:  usize,
+    ffn_norm: Tensor<f32>,
+    rope_table: RopeTable,
+    n_heads: usize,
+    n_kv_heads: usize,
     rms_norm_eps: f32,
 }
 
@@ -160,17 +166,35 @@ impl TransformerBlockInt8 {
     #[allow(clippy::too_many_arguments)]
     #[must_use]
     pub fn new(
-        wq:    QuantizedMatrix, wk: QuantizedMatrix,
-        wv:    QuantizedMatrix, wo: QuantizedMatrix,
-        attn_norm:  Tensor<f32>,
-        wgate: QuantizedMatrix, wup: QuantizedMatrix, wdown: QuantizedMatrix,
-        ffn_norm:   Tensor<f32>,
+        wq: QuantizedMatrix,
+        wk: QuantizedMatrix,
+        wv: QuantizedMatrix,
+        wo: QuantizedMatrix,
+        attn_norm: Tensor<f32>,
+        wgate: QuantizedMatrix,
+        wup: QuantizedMatrix,
+        wdown: QuantizedMatrix,
+        ffn_norm: Tensor<f32>,
         rope_table: RopeTable,
-        n_heads: usize, n_kv_heads: usize, rms_norm_eps: f32,
+        n_heads: usize,
+        n_kv_heads: usize,
+        rms_norm_eps: f32,
     ) -> Self {
-        Self { wq, wk, wv, wo, attn_norm,
-               wgate, wup, wdown, ffn_norm,
-               rope_table, n_heads, n_kv_heads, rms_norm_eps }
+        Self {
+            wq,
+            wk,
+            wv,
+            wo,
+            attn_norm,
+            wgate,
+            wup,
+            wdown,
+            ffn_norm,
+            rope_table,
+            n_heads,
+            n_kv_heads,
+            rms_norm_eps,
+        }
     }
 
     /// Full-sequence prefill forward (no KV-cache write, start_pos = 0).
@@ -181,8 +205,11 @@ impl TransformerBlockInt8 {
 
     /// Cached prefill forward — writes K/V into `cache[layer]`.
     pub fn forward_cached(
-        &self, x: &Tensor<f32>, start_pos: usize,
-        cache: &mut KvCache, layer: usize,
+        &self,
+        x: &Tensor<f32>,
+        start_pos: usize,
+        cache: &mut KvCache,
+        layer: usize,
     ) -> Result<Tensor<f32>> {
         let x = self.attn_sublayer_cached(x, start_pos, cache, layer)?;
         self.ffn_sublayer(&x)
@@ -203,8 +230,11 @@ impl TransformerBlockInt8 {
     /// Results are numerically identical to [`forward_cached`] — same
     /// quantization path, only scheduling differs.
     pub fn forward_cached_parallel(
-        &self, x: &Tensor<f32>, start_pos: usize,
-        cache: &mut KvCache, layer: usize,
+        &self,
+        x: &Tensor<f32>,
+        start_pos: usize,
+        cache: &mut KvCache,
+        layer: usize,
     ) -> Result<Tensor<f32>> {
         // Rayon's fixed thread-dispatch cost (~240 µs on M1 Pro) makes the
         // parallel path slower than sequential for small sequence lengths.
@@ -220,8 +250,11 @@ impl TransformerBlockInt8 {
 
     /// Single-token decode step — appends one K/V row to `cache[layer]`.
     pub fn forward_decode(
-        &self, x: &Tensor<f32>, pos: usize,
-        cache: &mut KvCache, layer: usize,
+        &self,
+        x: &Tensor<f32>,
+        pos: usize,
+        cache: &mut KvCache,
+        layer: usize,
     ) -> Result<Tensor<f32>> {
         let x = self.attn_sublayer_decode(x, pos, cache, layer)?;
         self.ffn_sublayer(&x)
@@ -232,76 +265,93 @@ impl TransformerBlockInt8 {
     fn attn_sublayer(&self, x: &Tensor<f32>, start_pos: usize) -> Result<Tensor<f32>> {
         let seq = x.dims()[0];
         let normed = rmsnorm(x, &self.attn_norm, self.rms_norm_eps)?;
-        let mut q  = proj_int8(&normed, &self.wq)?;
-        let mut k  = proj_int8(&normed, &self.wk)?;
-        let v      = proj_int8(&normed, &self.wv)?;
+        let mut q = proj_int8(&normed, &self.wq)?;
+        let mut k = proj_int8(&normed, &self.wk)?;
+        let v = proj_int8(&normed, &self.wv)?;
         let hd_q = q.dims()[1] / self.n_heads;
         let hd_k = k.dims()[1] / self.n_kv_heads;
-        q = q.reshape(vec![seq, self.n_heads,    hd_q])?;
+        q = q.reshape(vec![seq, self.n_heads, hd_q])?;
         k = k.reshape(vec![seq, self.n_kv_heads, hd_k])?;
         rope_apply(&mut q, &self.rope_table, start_pos)?;
         rope_apply(&mut k, &self.rope_table, start_pos)?;
-        q = q.reshape(vec![seq, self.n_heads    * hd_q])?;
+        q = q.reshape(vec![seq, self.n_heads * hd_q])?;
         k = k.reshape(vec![seq, self.n_kv_heads * hd_k])?;
         let attn_out = grouped_query_attention_causal_with_offset(
-            &q, &k, &v, self.n_heads, self.n_kv_heads, start_pos,
+            &q,
+            &k,
+            &v,
+            self.n_heads,
+            self.n_kv_heads,
+            start_pos,
         )?;
         let projected = proj_int8(&attn_out, &self.wo)?;
         add_elementwise(x, &projected)
     }
 
     fn attn_sublayer_cached(
-        &self, x: &Tensor<f32>, start_pos: usize,
-        cache: &mut KvCache, layer: usize,
+        &self,
+        x: &Tensor<f32>,
+        start_pos: usize,
+        cache: &mut KvCache,
+        layer: usize,
     ) -> Result<Tensor<f32>> {
         let seq = x.dims()[0];
         let normed = rmsnorm(x, &self.attn_norm, self.rms_norm_eps)?;
-        let mut q  = proj_int8(&normed, &self.wq)?;
-        let mut k  = proj_int8(&normed, &self.wk)?;
-        let v      = proj_int8(&normed, &self.wv)?;
+        let mut q = proj_int8(&normed, &self.wq)?;
+        let mut k = proj_int8(&normed, &self.wk)?;
+        let v = proj_int8(&normed, &self.wv)?;
         let hd_q = q.dims()[1] / self.n_heads;
         let hd_k = k.dims()[1] / self.n_kv_heads;
-        q = q.reshape(vec![seq, self.n_heads,    hd_q])?;
+        q = q.reshape(vec![seq, self.n_heads, hd_q])?;
         k = k.reshape(vec![seq, self.n_kv_heads, hd_k])?;
         rope_apply(&mut q, &self.rope_table, start_pos)?;
         rope_apply(&mut k, &self.rope_table, start_pos)?;
-        q = q.reshape(vec![seq, self.n_heads    * hd_q])?;
+        q = q.reshape(vec![seq, self.n_heads * hd_q])?;
         k = k.reshape(vec![seq, self.n_kv_heads * hd_k])?;
         let attn_out = cached_attention_prefill(
-            cache, layer, start_pos, &q, &k, &v, self.n_heads, self.n_kv_heads,
+            cache,
+            layer,
+            start_pos,
+            &q,
+            &k,
+            &v,
+            self.n_heads,
+            self.n_kv_heads,
         )?;
         let projected = proj_int8(&attn_out, &self.wo)?;
         add_elementwise(x, &projected)
     }
 
     fn attn_sublayer_decode(
-        &self, x: &Tensor<f32>, pos: usize,
-        cache: &mut KvCache, layer: usize,
+        &self,
+        x: &Tensor<f32>,
+        pos: usize,
+        cache: &mut KvCache,
+        layer: usize,
     ) -> Result<Tensor<f32>> {
         let normed = rmsnorm(x, &self.attn_norm, self.rms_norm_eps)?;
-        let mut q  = proj_int8(&normed, &self.wq)?;
-        let mut k  = proj_int8(&normed, &self.wk)?;
-        let v      = proj_int8(&normed, &self.wv)?;
+        let mut q = proj_int8(&normed, &self.wq)?;
+        let mut k = proj_int8(&normed, &self.wk)?;
+        let v = proj_int8(&normed, &self.wv)?;
         let hd_q = q.dims()[1] / self.n_heads;
         let hd_k = k.dims()[1] / self.n_kv_heads;
-        q = q.reshape(vec![1, self.n_heads,    hd_q])?;
+        q = q.reshape(vec![1, self.n_heads, hd_q])?;
         k = k.reshape(vec![1, self.n_kv_heads, hd_k])?;
         rope_apply(&mut q, &self.rope_table, pos)?;
         rope_apply(&mut k, &self.rope_table, pos)?;
-        q = q.reshape(vec![1, self.n_heads    * hd_q])?;
+        q = q.reshape(vec![1, self.n_heads * hd_q])?;
         k = k.reshape(vec![1, self.n_kv_heads * hd_k])?;
-        let attn_out = cached_attention_decode(
-            cache, layer, pos, &q, &k, &v, self.n_heads, self.n_kv_heads,
-        )?;
+        let attn_out =
+            cached_attention_decode(cache, layer, pos, &q, &k, &v, self.n_heads, self.n_kv_heads)?;
         let projected = proj_int8(&attn_out, &self.wo)?;
         add_elementwise(x, &projected)
     }
 
     fn ffn_sublayer(&self, x: &Tensor<f32>) -> Result<Tensor<f32>> {
-        let normed  = rmsnorm(x, &self.ffn_norm, self.rms_norm_eps)?;
-        let gate    = proj_int8(&normed, &self.wgate)?;
-        let up      = proj_int8(&normed, &self.wup)?;
-        let hidden  = swiglu(&gate, &up)?;
+        let normed = rmsnorm(x, &self.ffn_norm, self.rms_norm_eps)?;
+        let gate = proj_int8(&normed, &self.wgate)?;
+        let up = proj_int8(&normed, &self.wup)?;
+        let hidden = swiglu(&gate, &up)?;
         let ffn_out = proj_int8(&hidden, &self.wdown)?;
         add_elementwise(x, &ffn_out)
     }
@@ -309,34 +359,44 @@ impl TransformerBlockInt8 {
     // ── parallel sublayers (commit 18.6) ─────────────────────────────────
 
     fn attn_sublayer_cached_parallel(
-        &self, x: &Tensor<f32>, start_pos: usize,
-        cache: &mut KvCache, layer: usize,
+        &self,
+        x: &Tensor<f32>,
+        start_pos: usize,
+        cache: &mut KvCache,
+        layer: usize,
     ) -> Result<Tensor<f32>> {
         let seq = x.dims()[0];
         let normed = rmsnorm(x, &self.attn_norm, self.rms_norm_eps)?;
-        let mut q  = proj_int8_par(&normed, &self.wq)?;
-        let mut k  = proj_int8_par(&normed, &self.wk)?;
-        let v      = proj_int8_par(&normed, &self.wv)?;
+        let mut q = proj_int8_par(&normed, &self.wq)?;
+        let mut k = proj_int8_par(&normed, &self.wk)?;
+        let v = proj_int8_par(&normed, &self.wv)?;
         let hd_q = q.dims()[1] / self.n_heads;
         let hd_k = k.dims()[1] / self.n_kv_heads;
-        q = q.reshape(vec![seq, self.n_heads,    hd_q])?;
+        q = q.reshape(vec![seq, self.n_heads, hd_q])?;
         k = k.reshape(vec![seq, self.n_kv_heads, hd_k])?;
         rope_apply(&mut q, &self.rope_table, start_pos)?;
         rope_apply(&mut k, &self.rope_table, start_pos)?;
-        q = q.reshape(vec![seq, self.n_heads    * hd_q])?;
+        q = q.reshape(vec![seq, self.n_heads * hd_q])?;
         k = k.reshape(vec![seq, self.n_kv_heads * hd_k])?;
         let attn_out = cached_attention_prefill(
-            cache, layer, start_pos, &q, &k, &v, self.n_heads, self.n_kv_heads,
+            cache,
+            layer,
+            start_pos,
+            &q,
+            &k,
+            &v,
+            self.n_heads,
+            self.n_kv_heads,
         )?;
         let projected = proj_int8_par(&attn_out, &self.wo)?;
         add_elementwise(x, &projected)
     }
 
     fn ffn_sublayer_parallel(&self, x: &Tensor<f32>) -> Result<Tensor<f32>> {
-        let normed  = rmsnorm(x, &self.ffn_norm, self.rms_norm_eps)?;
-        let gate    = proj_int8_par(&normed, &self.wgate)?;
-        let up      = proj_int8_par(&normed, &self.wup)?;
-        let hidden  = swiglu(&gate, &up)?;
+        let normed = rmsnorm(x, &self.ffn_norm, self.rms_norm_eps)?;
+        let gate = proj_int8_par(&normed, &self.wgate)?;
+        let up = proj_int8_par(&normed, &self.wup)?;
+        let hidden = swiglu(&gate, &up)?;
         let ffn_out = proj_int8_par(&hidden, &self.wdown)?;
         add_elementwise(x, &ffn_out)
     }
@@ -354,32 +414,40 @@ impl TransformerBlockInt8 {
 ///
 /// [`LlamaModel`]: crate::model::llama::LlamaModel
 pub struct LlamaModelInt8 {
-    config:      LlamaConfig,
+    config: LlamaConfig,
     /// `[vocab_size, embed_dim]` — kept f32 (embedding is a lookup).
-    token_embd:  Tensor<f32>,
-    blocks:      Vec<TransformerBlockInt8>,
+    token_embd: Tensor<f32>,
+    blocks: Vec<TransformerBlockInt8>,
     /// `[embed_dim]` — kept f32.
     output_norm: Tensor<f32>,
     /// `[vocab_size, embed_dim]` — INT8 unembedding matrix.
-    output:      QuantizedMatrix,
+    output: QuantizedMatrix,
 }
 
 impl LlamaModelInt8 {
     /// Construct from pre-built components (used in tests).
     #[must_use]
     pub fn new(
-        config:      LlamaConfig,
-        token_embd:  Tensor<f32>,
-        blocks:      Vec<TransformerBlockInt8>,
+        config: LlamaConfig,
+        token_embd: Tensor<f32>,
+        blocks: Vec<TransformerBlockInt8>,
         output_norm: Tensor<f32>,
-        output:      QuantizedMatrix,
+        output: QuantizedMatrix,
     ) -> Self {
-        Self { config, token_embd, blocks, output_norm, output }
+        Self {
+            config,
+            token_embd,
+            blocks,
+            output_norm,
+            output,
+        }
     }
 
     /// Return the model configuration.
     #[must_use]
-    pub fn config(&self) -> &LlamaConfig { &self.config }
+    pub fn config(&self) -> &LlamaConfig {
+        &self.config
+    }
 
     /// Load a GGUF model and quantize all projection weights to INT8.
     ///
@@ -392,37 +460,47 @@ impl LlamaModelInt8 {
     /// Returns [`ModelError`] on missing tensors or malformed metadata.
     pub fn from_loader(loader: &GgufLoader) -> Result<Self> {
         let config = LlamaConfig::from_metadata(loader.metadata())?;
-        let ex     = TensorExtractor::new(loader);
+        let ex = TensorExtractor::new(loader);
 
-        let token_embd:  Tensor<f32> = ex.extract(global_weight_name(GlobalWeightRole::TokenEmbd))?;
-        let output_norm: Tensor<f32> = ex.extract(global_weight_name(GlobalWeightRole::OutputNorm))?;
-        let output_f32:  Tensor<f32> = ex.extract(global_weight_name(GlobalWeightRole::Output))?;
+        let token_embd: Tensor<f32> =
+            ex.extract(global_weight_name(GlobalWeightRole::TokenEmbd))?;
+        let output_norm: Tensor<f32> =
+            ex.extract(global_weight_name(GlobalWeightRole::OutputNorm))?;
+        let output_f32: Tensor<f32> = ex.extract(global_weight_name(GlobalWeightRole::Output))?;
         let output = quantize_tensor(&output_f32);
 
-        let head_dim   = config.head_dim() as usize;
+        let head_dim = config.head_dim() as usize;
         let rope_table = RopeTable::new(
-            config.context_length as usize, head_dim, config.rope_freq_base,
+            config.context_length as usize,
+            head_dim,
+            config.rope_freq_base,
         );
 
         let mut blocks = Vec::with_capacity(config.block_count as usize);
         for layer in 0..config.block_count as usize {
-            let wq:        Tensor<f32> = ex.extract(&weight_name(layer, WeightRole::AttnQ))?;
-            let wk:        Tensor<f32> = ex.extract(&weight_name(layer, WeightRole::AttnK))?;
-            let wv:        Tensor<f32> = ex.extract(&weight_name(layer, WeightRole::AttnV))?;
-            let wo:        Tensor<f32> = ex.extract(&weight_name(layer, WeightRole::AttnOutput))?;
+            let wq: Tensor<f32> = ex.extract(&weight_name(layer, WeightRole::AttnQ))?;
+            let wk: Tensor<f32> = ex.extract(&weight_name(layer, WeightRole::AttnK))?;
+            let wv: Tensor<f32> = ex.extract(&weight_name(layer, WeightRole::AttnV))?;
+            let wo: Tensor<f32> = ex.extract(&weight_name(layer, WeightRole::AttnOutput))?;
             let attn_norm: Tensor<f32> = ex.extract(&weight_name(layer, WeightRole::AttnNorm))?;
-            let wgate:     Tensor<f32> = ex.extract(&weight_name(layer, WeightRole::FfnGate))?;
-            let wup:       Tensor<f32> = ex.extract(&weight_name(layer, WeightRole::FfnUp))?;
-            let wdown:     Tensor<f32> = ex.extract(&weight_name(layer, WeightRole::FfnDown))?;
-            let ffn_norm:  Tensor<f32> = ex.extract(&weight_name(layer, WeightRole::FfnNorm))?;
+            let wgate: Tensor<f32> = ex.extract(&weight_name(layer, WeightRole::FfnGate))?;
+            let wup: Tensor<f32> = ex.extract(&weight_name(layer, WeightRole::FfnUp))?;
+            let wdown: Tensor<f32> = ex.extract(&weight_name(layer, WeightRole::FfnDown))?;
+            let ffn_norm: Tensor<f32> = ex.extract(&weight_name(layer, WeightRole::FfnNorm))?;
             blocks.push(TransformerBlockInt8::new(
-                quantize_tensor(&wq),   quantize_tensor(&wk),
-                quantize_tensor(&wv),   quantize_tensor(&wo),
+                quantize_tensor(&wq),
+                quantize_tensor(&wk),
+                quantize_tensor(&wv),
+                quantize_tensor(&wo),
                 attn_norm,
-                quantize_tensor(&wgate), quantize_tensor(&wup), quantize_tensor(&wdown),
+                quantize_tensor(&wgate),
+                quantize_tensor(&wup),
+                quantize_tensor(&wdown),
                 ffn_norm,
                 rope_table.clone(),
-                config.n_heads as usize, config.n_kv_heads as usize, config.rms_norm_eps,
+                config.n_heads as usize,
+                config.n_kv_heads as usize,
+                config.rms_norm_eps,
             ));
         }
         Ok(Self::new(config, token_embd, blocks, output_norm, output))
@@ -457,12 +535,7 @@ impl LlamaModelInt8 {
     /// # Errors
     ///
     /// Returns [`ModelError`] on out-of-range token ID, cache overflow, or shape failures.
-    pub fn forward_decode(
-        &self,
-        token: u32,
-        pos:   usize,
-        cache: &mut KvCache,
-    ) -> Result<Vec<f32>> {
+    pub fn forward_decode(&self, token: u32, pos: usize, cache: &mut KvCache) -> Result<Vec<f32>> {
         let mut x = embed(&self.token_embd, &[token])?;
         for (layer, block) in self.blocks.iter().enumerate() {
             x = block.forward_decode(&x, pos, cache, layer)?;
@@ -480,19 +553,21 @@ mod tests {
     use super::*;
     use crate::cache::KvCache;
     use crate::gguf::{Metadata, MetadataValue};
-    use crate::model::llama::{config::LlamaConfig, block::TransformerBlock, forward::LlamaModel};
+    use crate::model::llama::{block::TransformerBlock, config::LlamaConfig, forward::LlamaModel};
     use crate::ops::rope::RopeTable;
 
     fn tiny_config() -> LlamaConfig {
         let mut m = Metadata::new();
         for (k, v) in [
-            ("llama.block_count",          MetadataValue::Uint32(2)),
-            ("llama.embedding_length",     MetadataValue::Uint32(16)),
+            ("llama.block_count", MetadataValue::Uint32(2)),
+            ("llama.embedding_length", MetadataValue::Uint32(16)),
             ("llama.attention.head_count", MetadataValue::Uint32(2)),
-            ("llama.feed_forward_length",  MetadataValue::Uint32(32)),
-            ("llama.context_length",       MetadataValue::Uint32(64)),
-            ("llama.vocab_size",           MetadataValue::Uint32(32)),
-        ] { m.insert(k.to_string(), v); }
+            ("llama.feed_forward_length", MetadataValue::Uint32(32)),
+            ("llama.context_length", MetadataValue::Uint32(64)),
+            ("llama.vocab_size", MetadataValue::Uint32(32)),
+        ] {
+            m.insert(k.to_string(), v);
+        }
         LlamaConfig::from_metadata(&m).unwrap()
     }
 
@@ -506,29 +581,31 @@ mod tests {
 
     /// Build a `LlamaModelInt8` with synthetic non-trivial weights.
     fn make_int8_model(cfg: &LlamaConfig) -> LlamaModelInt8 {
-        let embed  = cfg.embedding_length   as usize;
-        let vocab  = cfg.vocab_size         as usize;
-        let ffn    = cfg.feed_forward_length as usize;
-        let heads  = cfg.n_heads            as usize;
-        let kv     = cfg.n_kv_heads         as usize;
-        let hd     = cfg.head_dim()         as usize;
-        let qd     = heads * hd;
-        let kvd    = kv   * hd;
-        let rope   = RopeTable::new(cfg.context_length as usize, hd, cfg.rope_freq_base);
+        let embed = cfg.embedding_length as usize;
+        let vocab = cfg.vocab_size as usize;
+        let ffn = cfg.feed_forward_length as usize;
+        let heads = cfg.n_heads as usize;
+        let kv = cfg.n_kv_heads as usize;
+        let hd = cfg.head_dim() as usize;
+        let qd = heads * hd;
+        let kvd = kv * hd;
+        let rope = RopeTable::new(cfg.context_length as usize, hd, cfg.rope_freq_base);
 
         let make_block = |seed: f32| {
             TransformerBlockInt8::new(
-                quantize_tensor(&smooth_weight(qd,   embed, seed * 1.0)),
-                quantize_tensor(&smooth_weight(kvd,  embed, seed * 1.1)),
-                quantize_tensor(&smooth_weight(kvd,  embed, seed * 1.2)),
-                quantize_tensor(&smooth_weight(embed, qd,   seed * 1.3)),
+                quantize_tensor(&smooth_weight(qd, embed, seed * 1.0)),
+                quantize_tensor(&smooth_weight(kvd, embed, seed * 1.1)),
+                quantize_tensor(&smooth_weight(kvd, embed, seed * 1.2)),
+                quantize_tensor(&smooth_weight(embed, qd, seed * 1.3)),
                 Tensor::ones(vec![embed]),
-                quantize_tensor(&smooth_weight(ffn,  embed, seed * 1.4)),
-                quantize_tensor(&smooth_weight(ffn,  embed, seed * 1.5)),
-                quantize_tensor(&smooth_weight(embed, ffn,  seed * 1.6)),
+                quantize_tensor(&smooth_weight(ffn, embed, seed * 1.4)),
+                quantize_tensor(&smooth_weight(ffn, embed, seed * 1.5)),
+                quantize_tensor(&smooth_weight(embed, ffn, seed * 1.6)),
                 Tensor::ones(vec![embed]),
                 rope.clone(),
-                heads, kv, cfg.rms_norm_eps,
+                heads,
+                kv,
+                cfg.rms_norm_eps,
             )
         };
         let blocks: Vec<_> = (0..cfg.block_count as usize)
@@ -545,29 +622,31 @@ mod tests {
 
     /// Build the equivalent `LlamaModel` (f32) from the same raw weights.
     fn make_f32_model(cfg: &LlamaConfig) -> LlamaModel {
-        let embed  = cfg.embedding_length   as usize;
-        let vocab  = cfg.vocab_size         as usize;
-        let ffn    = cfg.feed_forward_length as usize;
-        let heads  = cfg.n_heads            as usize;
-        let kv     = cfg.n_kv_heads         as usize;
-        let hd     = cfg.head_dim()         as usize;
-        let qd     = heads * hd;
-        let kvd    = kv   * hd;
-        let rope   = RopeTable::new(cfg.context_length as usize, hd, cfg.rope_freq_base);
+        let embed = cfg.embedding_length as usize;
+        let vocab = cfg.vocab_size as usize;
+        let ffn = cfg.feed_forward_length as usize;
+        let heads = cfg.n_heads as usize;
+        let kv = cfg.n_kv_heads as usize;
+        let hd = cfg.head_dim() as usize;
+        let qd = heads * hd;
+        let kvd = kv * hd;
+        let rope = RopeTable::new(cfg.context_length as usize, hd, cfg.rope_freq_base);
 
         let make_block = |seed: f32| {
             TransformerBlock::new(
-                smooth_weight(qd,   embed, seed * 1.0),
-                smooth_weight(kvd,  embed, seed * 1.1),
-                smooth_weight(kvd,  embed, seed * 1.2),
-                smooth_weight(embed, qd,   seed * 1.3),
+                smooth_weight(qd, embed, seed * 1.0),
+                smooth_weight(kvd, embed, seed * 1.1),
+                smooth_weight(kvd, embed, seed * 1.2),
+                smooth_weight(embed, qd, seed * 1.3),
                 Tensor::ones(vec![embed]),
-                smooth_weight(ffn,  embed, seed * 1.4),
-                smooth_weight(ffn,  embed, seed * 1.5),
-                smooth_weight(embed, ffn,  seed * 1.6),
+                smooth_weight(ffn, embed, seed * 1.4),
+                smooth_weight(ffn, embed, seed * 1.5),
+                smooth_weight(embed, ffn, seed * 1.6),
                 Tensor::ones(vec![embed]),
                 rope.clone(),
-                heads, kv, cfg.rms_norm_eps,
+                heads,
+                kv,
+                cfg.rms_norm_eps,
             )
         };
         let blocks: Vec<_> = (0..cfg.block_count as usize)
@@ -586,19 +665,19 @@ mod tests {
 
     #[test]
     fn forward_single_token_output_shape() {
-        let cfg   = tiny_config();
+        let cfg = tiny_config();
         let vocab = cfg.vocab_size as usize;
         let model = make_int8_model(&cfg);
-        let out   = model.forward(&[0]).unwrap();
+        let out = model.forward(&[0]).unwrap();
         assert_eq!(out.dims(), &[1, vocab]);
     }
 
     #[test]
     fn forward_multi_token_output_shape() {
-        let cfg   = tiny_config();
+        let cfg = tiny_config();
         let vocab = cfg.vocab_size as usize;
         let model = make_int8_model(&cfg);
-        let out   = model.forward(&[0, 1, 2, 3]).unwrap();
+        let out = model.forward(&[0, 1, 2, 3]).unwrap();
         assert_eq!(out.dims(), &[4, vocab]);
     }
 
@@ -606,11 +685,11 @@ mod tests {
 
     #[test]
     fn forward_no_nan_or_inf() {
-        let cfg   = tiny_config();
+        let cfg = tiny_config();
         let model = make_int8_model(&cfg);
-        let out   = model.forward(&[0, 5, 31]).unwrap();
+        let out = model.forward(&[0, 5, 31]).unwrap();
         for &v in out.as_slice() {
-            assert!(!v.is_nan(),      "NaN in INT8 logits");
+            assert!(!v.is_nan(), "NaN in INT8 logits");
             assert!(!v.is_infinite(), "Inf in INT8 logits");
         }
     }
@@ -619,14 +698,14 @@ mod tests {
 
     #[test]
     fn forward_empty_tokens_rejected() {
-        let cfg   = tiny_config();
+        let cfg = tiny_config();
         let model = make_int8_model(&cfg);
         assert!(model.forward(&[]).is_err());
     }
 
     #[test]
     fn forward_out_of_range_token_rejected() {
-        let cfg   = tiny_config();
+        let cfg = tiny_config();
         let model = make_int8_model(&cfg);
         assert!(model.forward(&[cfg.vocab_size]).is_err());
     }
@@ -635,28 +714,28 @@ mod tests {
 
     #[test]
     fn forward_decode_output_length() {
-        let cfg        = tiny_config();
-        let vocab      = cfg.vocab_size as usize;
-        let model      = make_int8_model(&cfg);
-        let n_layers   = cfg.block_count as usize;
-        let n_kv_heads = cfg.n_kv_heads  as usize;
-        let head_dim   = cfg.head_dim()  as usize;
-        let mut cache  = KvCache::new(n_layers, cfg.context_length as usize, n_kv_heads, head_dim);
+        let cfg = tiny_config();
+        let vocab = cfg.vocab_size as usize;
+        let model = make_int8_model(&cfg);
+        let n_layers = cfg.block_count as usize;
+        let n_kv_heads = cfg.n_kv_heads as usize;
+        let head_dim = cfg.head_dim() as usize;
+        let mut cache = KvCache::new(n_layers, cfg.context_length as usize, n_kv_heads, head_dim);
         let logits = model.forward_decode(0, 0, &mut cache).unwrap();
         assert_eq!(logits.len(), vocab);
     }
 
     #[test]
     fn forward_decode_no_nan() {
-        let cfg        = tiny_config();
-        let model      = make_int8_model(&cfg);
-        let n_layers   = cfg.block_count as usize;
-        let n_kv_heads = cfg.n_kv_heads  as usize;
-        let head_dim   = cfg.head_dim()  as usize;
-        let mut cache  = KvCache::new(n_layers, cfg.context_length as usize, n_kv_heads, head_dim);
+        let cfg = tiny_config();
+        let model = make_int8_model(&cfg);
+        let n_layers = cfg.block_count as usize;
+        let n_kv_heads = cfg.n_kv_heads as usize;
+        let head_dim = cfg.head_dim() as usize;
+        let mut cache = KvCache::new(n_layers, cfg.context_length as usize, n_kv_heads, head_dim);
         let logits = model.forward_decode(5, 0, &mut cache).unwrap();
         for (i, &v) in logits.iter().enumerate() {
-            assert!(!v.is_nan(),      "NaN in INT8 decode logits[{i}]");
+            assert!(!v.is_nan(), "NaN in INT8 decode logits[{i}]");
             assert!(!v.is_infinite(), "Inf in INT8 decode logits[{i}]");
         }
     }
@@ -673,22 +752,24 @@ mod tests {
 
     #[test]
     fn logits_within_10_percent_of_f32_baseline() {
-        let cfg        = tiny_config();
+        let cfg = tiny_config();
         let int8_model = make_int8_model(&cfg);
-        let f32_model  = make_f32_model(&cfg);
-        let tokens     = &[0_u32, 5, 15, 31];
+        let f32_model = make_f32_model(&cfg);
+        let tokens = &[0_u32, 5, 15, 31];
 
         let int8_logits = int8_model.forward(tokens).unwrap();
-        let f32_logits  = f32_model.forward(tokens).unwrap();
+        let f32_logits = f32_model.forward(tokens).unwrap();
         assert_eq!(int8_logits.dims(), f32_logits.dims());
 
         let f32_data = f32_logits.as_slice();
-        let f32_max  = f32_data.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-        let f32_min  = f32_data.iter().cloned().fold(f32::INFINITY,     f32::min);
+        let f32_max = f32_data.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+        let f32_min = f32_data.iter().cloned().fold(f32::INFINITY, f32::min);
         // Floor of 1e-3 ensures an all-equal-logit model doesn't trivially pass.
         let logit_range = (f32_max - f32_min).max(1e-3);
 
-        let max_abs_err = int8_logits.as_slice().iter()
+        let max_abs_err = int8_logits
+            .as_slice()
+            .iter()
             .zip(f32_data)
             .map(|(&i, &f)| (i - f).abs())
             .fold(0.0_f32, f32::max);
@@ -704,7 +785,7 @@ mod tests {
     /// Confirm the config accessor works on the INT8 model.
     #[test]
     fn config_accessor() {
-        let cfg   = tiny_config();
+        let cfg = tiny_config();
         let model = make_int8_model(&cfg);
         assert_eq!(model.config().block_count, 2);
         assert_eq!(model.config().vocab_size, 32);
@@ -713,37 +794,40 @@ mod tests {
     // ── forward_cached_parallel tests (commit 18.6) ───────────────────────
 
     fn make_single_int8_block(cfg: &LlamaConfig) -> TransformerBlockInt8 {
-        let embed = cfg.embedding_length    as usize;
-        let ffn   = cfg.feed_forward_length as usize;
-        let heads = cfg.n_heads             as usize;
-        let kv    = cfg.n_kv_heads          as usize;
-        let hd    = cfg.head_dim()          as usize;
-        let qd    = heads * hd;
-        let kvd   = kv    * hd;
-        let rope  = RopeTable::new(cfg.context_length as usize, hd, cfg.rope_freq_base);
+        let embed = cfg.embedding_length as usize;
+        let ffn = cfg.feed_forward_length as usize;
+        let heads = cfg.n_heads as usize;
+        let kv = cfg.n_kv_heads as usize;
+        let hd = cfg.head_dim() as usize;
+        let qd = heads * hd;
+        let kvd = kv * hd;
+        let rope = RopeTable::new(cfg.context_length as usize, hd, cfg.rope_freq_base);
         TransformerBlockInt8::new(
-            quantize_tensor(&smooth_weight(qd,   embed, 1.0)),
-            quantize_tensor(&smooth_weight(kvd,  embed, 1.1)),
-            quantize_tensor(&smooth_weight(kvd,  embed, 1.2)),
-            quantize_tensor(&smooth_weight(embed, qd,   1.3)),
+            quantize_tensor(&smooth_weight(qd, embed, 1.0)),
+            quantize_tensor(&smooth_weight(kvd, embed, 1.1)),
+            quantize_tensor(&smooth_weight(kvd, embed, 1.2)),
+            quantize_tensor(&smooth_weight(embed, qd, 1.3)),
             Tensor::ones(vec![embed]),
-            quantize_tensor(&smooth_weight(ffn,  embed, 1.4)),
-            quantize_tensor(&smooth_weight(ffn,  embed, 1.5)),
-            quantize_tensor(&smooth_weight(embed, ffn,  1.6)),
+            quantize_tensor(&smooth_weight(ffn, embed, 1.4)),
+            quantize_tensor(&smooth_weight(ffn, embed, 1.5)),
+            quantize_tensor(&smooth_weight(embed, ffn, 1.6)),
             Tensor::ones(vec![embed]),
-            rope, heads, kv, cfg.rms_norm_eps,
+            rope,
+            heads,
+            kv,
+            cfg.rms_norm_eps,
         )
     }
 
     #[test]
     fn forward_cached_parallel_output_shape() {
-        let cfg       = tiny_config();
-        let block     = make_single_int8_block(&cfg);
-        let embed     = cfg.embedding_length as usize;
-        let seq       = 32_usize;  // at or above MIN_PARALLEL_SEQ — exercises parallel path
-        let n_kv      = cfg.n_kv_heads as usize;
-        let hd        = cfg.head_dim()  as usize;
-        let x         = Tensor::from_vec(vec![0.1_f32; seq * embed], vec![seq, embed]).unwrap();
+        let cfg = tiny_config();
+        let block = make_single_int8_block(&cfg);
+        let embed = cfg.embedding_length as usize;
+        let seq = 32_usize; // at or above MIN_PARALLEL_SEQ — exercises parallel path
+        let n_kv = cfg.n_kv_heads as usize;
+        let hd = cfg.head_dim() as usize;
+        let x = Tensor::from_vec(vec![0.1_f32; seq * embed], vec![seq, embed]).unwrap();
         let mut cache = KvCache::new(1, cfg.context_length as usize, n_kv, hd);
         let out = block.forward_cached_parallel(&x, 0, &mut cache, 0).unwrap();
         assert_eq!(out.dims(), &[seq, embed]);
@@ -751,18 +835,18 @@ mod tests {
 
     #[test]
     fn forward_cached_parallel_no_nan() {
-        let cfg       = tiny_config();
-        let block     = make_single_int8_block(&cfg);
-        let embed     = cfg.embedding_length as usize;
-        let seq       = 32_usize;
-        let n_kv      = cfg.n_kv_heads as usize;
-        let hd        = cfg.head_dim()  as usize;
+        let cfg = tiny_config();
+        let block = make_single_int8_block(&cfg);
+        let embed = cfg.embedding_length as usize;
+        let seq = 32_usize;
+        let n_kv = cfg.n_kv_heads as usize;
+        let hd = cfg.head_dim() as usize;
         let data: Vec<f32> = (0..seq * embed).map(|i| (i as f32 * 0.01).sin()).collect();
-        let x         = Tensor::from_vec(data, vec![seq, embed]).unwrap();
+        let x = Tensor::from_vec(data, vec![seq, embed]).unwrap();
         let mut cache = KvCache::new(1, cfg.context_length as usize, n_kv, hd);
         let out = block.forward_cached_parallel(&x, 0, &mut cache, 0).unwrap();
         for &v in out.as_slice() {
-            assert!(!v.is_nan(),      "NaN in parallel INT8 block output");
+            assert!(!v.is_nan(), "NaN in parallel INT8 block output");
             assert!(!v.is_infinite(), "Inf in parallel INT8 block output");
         }
     }
@@ -770,25 +854,35 @@ mod tests {
     /// Parallel must produce numerically identical output to sequential.
     #[test]
     fn forward_cached_parallel_matches_sequential() {
-        let cfg       = tiny_config();
-        let block     = make_single_int8_block(&cfg);
-        let embed     = cfg.embedding_length as usize;
-        let seq       = 32_usize;  // above threshold — both paths exercise full parallel logic
-        let n_kv      = cfg.n_kv_heads as usize;
-        let hd        = cfg.head_dim()  as usize;
-        let data: Vec<f32> = (0..seq * embed).map(|i| (i as f32 * 0.017 - 0.5).tanh()).collect();
+        let cfg = tiny_config();
+        let block = make_single_int8_block(&cfg);
+        let embed = cfg.embedding_length as usize;
+        let seq = 32_usize; // above threshold — both paths exercise full parallel logic
+        let n_kv = cfg.n_kv_heads as usize;
+        let hd = cfg.head_dim() as usize;
+        let data: Vec<f32> = (0..seq * embed)
+            .map(|i| (i as f32 * 0.017 - 0.5).tanh())
+            .collect();
         let x = Tensor::from_vec(data, vec![seq, embed]).unwrap();
 
         let mut cache_seq = KvCache::new(1, cfg.context_length as usize, n_kv, hd);
         let mut cache_par = KvCache::new(1, cfg.context_length as usize, n_kv, hd);
 
         let out_seq = block.forward_cached(&x, 0, &mut cache_seq, 0).unwrap();
-        let out_par = block.forward_cached_parallel(&x, 0, &mut cache_par, 0).unwrap();
+        let out_par = block
+            .forward_cached_parallel(&x, 0, &mut cache_par, 0)
+            .unwrap();
 
         assert_eq!(out_seq.dims(), out_par.dims());
-        for (i, (s, p)) in out_seq.as_slice().iter().zip(out_par.as_slice()).enumerate() {
+        for (i, (s, p)) in out_seq
+            .as_slice()
+            .iter()
+            .zip(out_par.as_slice())
+            .enumerate()
+        {
             assert_eq!(
-                s.to_bits(), p.to_bits(),
+                s.to_bits(),
+                p.to_bits(),
                 "element {i}: seq={s} par={p} — parallel and sequential INT8 paths diverged"
             );
         }
@@ -798,12 +892,12 @@ mod tests {
     /// producing identical output and never being slower due to rayon overhead.
     #[test]
     fn forward_cached_parallel_falls_back_below_threshold() {
-        let cfg       = tiny_config();
-        let block     = make_single_int8_block(&cfg);
-        let embed     = cfg.embedding_length as usize;
-        let seq       = 8_usize;  // well below MIN_PARALLEL_SEQ=32
-        let n_kv      = cfg.n_kv_heads as usize;
-        let hd        = cfg.head_dim()  as usize;
+        let cfg = tiny_config();
+        let block = make_single_int8_block(&cfg);
+        let embed = cfg.embedding_length as usize;
+        let seq = 8_usize; // well below MIN_PARALLEL_SEQ=32
+        let n_kv = cfg.n_kv_heads as usize;
+        let hd = cfg.head_dim() as usize;
         let data: Vec<f32> = (0..seq * embed).map(|i| (i as f32 * 0.03).cos()).collect();
         let x = Tensor::from_vec(data, vec![seq, embed]).unwrap();
 
@@ -812,13 +906,21 @@ mod tests {
 
         // Both should produce identical output because parallel falls back to sequential.
         let out_seq = block.forward_cached(&x, 0, &mut cache_seq, 0).unwrap();
-        let out_par = block.forward_cached_parallel(&x, 0, &mut cache_par, 0).unwrap();
+        let out_par = block
+            .forward_cached_parallel(&x, 0, &mut cache_par, 0)
+            .unwrap();
 
         assert_eq!(out_seq.dims(), &[seq, embed]);
         assert_eq!(out_par.dims(), &[seq, embed]);
-        for (i, (s, p)) in out_seq.as_slice().iter().zip(out_par.as_slice()).enumerate() {
+        for (i, (s, p)) in out_seq
+            .as_slice()
+            .iter()
+            .zip(out_par.as_slice())
+            .enumerate()
+        {
             assert_eq!(
-                s.to_bits(), p.to_bits(),
+                s.to_bits(),
+                p.to_bits(),
                 "element {i}: fallback path diverged from sequential at seq={seq}"
             );
         }

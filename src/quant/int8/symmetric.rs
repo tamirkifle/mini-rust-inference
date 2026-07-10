@@ -40,10 +40,7 @@ pub const INT8_MIN: i8 = -127;
 /// ```
 #[must_use]
 pub fn quantize_symmetric(values: &[f32]) -> (Vec<i8>, f32) {
-    let max_abs = values
-        .iter()
-        .map(|v| v.abs())
-        .fold(0.0_f32, f32::max);
+    let max_abs = values.iter().map(|v| v.abs()).fold(0.0_f32, f32::max);
 
     let scale = if max_abs == 0.0 { 1.0 } else { max_abs / 127.0 };
     let inv_scale = 1.0 / scale;
@@ -64,10 +61,7 @@ pub fn quantize_symmetric(values: &[f32]) -> (Vec<i8>, f32) {
 /// Clears and refills `out`; avoids the allocation of [`quantize_symmetric`].
 /// Returns the scale factor.
 pub fn quantize_symmetric_into(values: &[f32], out: &mut Vec<i8>) -> f32 {
-    let max_abs = values
-        .iter()
-        .map(|v| v.abs())
-        .fold(0.0_f32, f32::max);
+    let max_abs = values.iter().map(|v| v.abs()).fold(0.0_f32, f32::max);
 
     let scale = if max_abs == 0.0 { 1.0 } else { max_abs / 127.0 };
     let inv_scale = 1.0 / scale;
@@ -138,20 +132,28 @@ pub fn quantize_with_stats(values: &[f32]) -> (Vec<i8>, f32, QuantStats) {
     for ((&orig, &rec), &q) in values.iter().zip(&recovered).zip(&quants) {
         let err = (orig - rec).abs();
         sse += err * err;
-        if err > max_abs_err { max_abs_err = err; }
+        if err > max_abs_err {
+            max_abs_err = err;
+        }
         let abs_orig = orig.abs();
         if abs_orig > 1e-6 {
             rel_err_sum += err / abs_orig;
             rel_count += 1;
         }
-        if q == INT8_MAX || q == INT8_MIN { clip_count += 1; }
+        if q == INT8_MAX || q == INT8_MIN {
+            clip_count += 1;
+        }
     }
 
     let stats = QuantStats {
         scale,
         rmse: if n > 0.0 { (sse / n).sqrt() } else { 0.0 },
         max_abs_err,
-        mean_rel_err: if rel_count > 0 { rel_err_sum / rel_count as f32 } else { 0.0 },
+        mean_rel_err: if rel_count > 0 {
+            rel_err_sum / rel_count as f32
+        } else {
+            0.0
+        },
         clip_fraction: if n > 0.0 { clip_count as f32 / n } else { 0.0 },
     };
 
@@ -171,7 +173,10 @@ mod tests {
         let vals = vec![0.0_f32, 2.54, -1.27, 1.0];
         let (_, scale) = quantize_symmetric(&vals);
         let expected = 2.54_f32 / 127.0;
-        assert!((scale - expected).abs() < 1e-6, "scale={scale} expected={expected}");
+        assert!(
+            (scale - expected).abs() < 1e-6,
+            "scale={scale} expected={expected}"
+        );
     }
 
     #[test]
@@ -197,7 +202,7 @@ mod tests {
     fn max_value_maps_to_127() {
         let vals = vec![1.0_f32, -1.0, 0.5];
         let (q, _) = quantize_symmetric(&vals);
-        assert_eq!(q[0],  127);
+        assert_eq!(q[0], 127);
         assert_eq!(q[1], -127);
     }
 
@@ -252,7 +257,8 @@ mod tests {
         let tolerance = scale / 2.0 + 1e-6;
         assert!(
             max_err <= tolerance,
-            "max_err={max_err} > scale/2={}", scale / 2.0
+            "max_err={max_err} > scale/2={}",
+            scale / 2.0
         );
     }
 
@@ -270,7 +276,8 @@ mod tests {
         let (_, _, stats) = quantize_with_stats(&vals);
         assert!(
             stats.mean_rel_err < 0.01,
-            "mean relative error {:.4} >= 1%", stats.mean_rel_err
+            "mean relative error {:.4} >= 1%",
+            stats.mean_rel_err
         );
     }
 

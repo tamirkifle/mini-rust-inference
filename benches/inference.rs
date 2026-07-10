@@ -101,10 +101,10 @@ fn bench_int8_speedup(c: &mut Criterion) {
     let mut group = c.benchmark_group("int8_speedup");
 
     for &size in &[128usize, 512, 1024] {
-        let act    = make_f32(size, size);
-        let w_f32  = make_f32(size, size);
+        let act = make_f32(size, size);
+        let w_f32 = make_f32(size, size);
         let w_int8 = make_qmatrix(size, size);
-        let flops  = (2 * size * size * size) as u64;
+        let flops = (2 * size * size * size) as u64;
         group.throughput(Throughput::Elements(flops));
 
         group.bench_with_input(BenchmarkId::new("f32_parallel", size), &size, |bench, _| {
@@ -112,18 +112,26 @@ fn bench_int8_speedup(c: &mut Criterion) {
         });
 
         // INT8 sequential: single-threaded baseline — what the old bench measured.
-        group.bench_with_input(BenchmarkId::new("int8_sequential", size), &size, |bench, _| {
-            bench.iter(|| matmul_int8_from_f32(&act, &w_int8).unwrap());
-        });
+        group.bench_with_input(
+            BenchmarkId::new("int8_sequential", size),
+            &size,
+            |bench, _| {
+                bench.iter(|| matmul_int8_from_f32(&act, &w_int8).unwrap());
+            },
+        );
 
         // INT8 parallel: quantize activations then dispatch to rayon+NEON/AVX2.
         // This matches what TransformerBlockInt8::forward_cached_parallel uses.
-        group.bench_with_input(BenchmarkId::new("int8_parallel", size), &size, |bench, _| {
-            bench.iter(|| {
-                let (act_q, act_scale) = quantize_symmetric(act.as_slice());
-                matmul_int8_parallel(&act_q, act_scale, &w_int8, size).unwrap()
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("int8_parallel", size),
+            &size,
+            |bench, _| {
+                bench.iter(|| {
+                    let (act_q, act_scale) = quantize_symmetric(act.as_slice());
+                    matmul_int8_parallel(&act_q, act_scale, &w_int8, size).unwrap()
+                });
+            },
+        );
     }
 
     group.finish();

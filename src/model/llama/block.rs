@@ -27,17 +27,17 @@
 //! | `wdown` | `[embed_dim, ffn_dim]` |
 //! | `ffn_norm` | `[embed_dim]` |
 
+use crate::attention::cached::{cached_attention_decode, cached_attention_prefill};
+use crate::attention::gqa::grouped_query_attention_causal_with_offset;
 use crate::cache::KvCache;
 use crate::model::{ModelError, Result};
 use crate::ops::{
+    activation::swiglu,
     matmul::matmul_blocked,
     matmul::matmul_parallel,
     norm::rmsnorm,
-    activation::swiglu,
-    rope::{RopeTable, rope_apply},
+    rope::{rope_apply, RopeTable},
 };
-use crate::attention::cached::{cached_attention_decode, cached_attention_prefill};
-use crate::attention::gqa::grouped_query_attention_causal_with_offset;
 use crate::tensor::Tensor;
 
 // ── TransformerBlock ─────────────────────────────────────────────────────────
@@ -67,13 +67,35 @@ impl TransformerBlock {
     #[allow(clippy::too_many_arguments)]
     #[must_use]
     pub fn new(
-        wq: Tensor<f32>, wk: Tensor<f32>, wv: Tensor<f32>, wo: Tensor<f32>,
-        attn_norm: Tensor<f32>, wgate: Tensor<f32>, wup: Tensor<f32>,
-        wdown: Tensor<f32>, ffn_norm: Tensor<f32>, rope_table: RopeTable,
-        n_heads: usize, n_kv_heads: usize, rms_norm_eps: f32,
+        wq: Tensor<f32>,
+        wk: Tensor<f32>,
+        wv: Tensor<f32>,
+        wo: Tensor<f32>,
+        attn_norm: Tensor<f32>,
+        wgate: Tensor<f32>,
+        wup: Tensor<f32>,
+        wdown: Tensor<f32>,
+        ffn_norm: Tensor<f32>,
+        rope_table: RopeTable,
+        n_heads: usize,
+        n_kv_heads: usize,
+        rms_norm_eps: f32,
     ) -> Self {
-        Self { wq, wk, wv, wo, attn_norm, wgate, wup, wdown, ffn_norm,
-               rope_table, n_heads, n_kv_heads, rms_norm_eps }
+        Self {
+            wq,
+            wk,
+            wv,
+            wo,
+            attn_norm,
+            wgate,
+            wup,
+            wdown,
+            ffn_norm,
+            rope_table,
+            n_heads,
+            n_kv_heads,
+            rms_norm_eps,
+        }
     }
 
     /// Run one forward pass through the transformer block.
@@ -131,10 +153,10 @@ impl TransformerBlock {
     /// Returns [`ModelError`] if any tensor operation or cache write fails.
     pub fn forward_cached_parallel(
         &self,
-        x:         &Tensor<f32>,
+        x: &Tensor<f32>,
         start_pos: usize,
-        cache:     &mut KvCache,
-        layer:     usize,
+        cache: &mut KvCache,
+        layer: usize,
     ) -> Result<Tensor<f32>> {
         let x = self.attention_sublayer_cached_parallel(x, start_pos, cache, layer)?;
         let x = self.ffn_sublayer_parallel(&x)?;
@@ -158,8 +180,8 @@ impl TransformerBlock {
     /// Returns [`ModelError`] if any tensor operation or cache write fails.
     pub fn forward_decode(
         &self,
-        x:     &Tensor<f32>,
-        pos:   usize,
+        x: &Tensor<f32>,
+        pos: usize,
         cache: &mut KvCache,
         layer: usize,
     ) -> Result<Tensor<f32>> {
@@ -183,7 +205,12 @@ impl TransformerBlock {
         q = q.reshape(vec![seq, self.n_heads * head_dim_q])?;
         k = k.reshape(vec![seq, self.n_kv_heads * head_dim_k])?;
         let attn_out = grouped_query_attention_causal_with_offset(
-            &q, &k, &v, self.n_heads, self.n_kv_heads, start_pos,
+            &q,
+            &k,
+            &v,
+            self.n_heads,
+            self.n_kv_heads,
+            start_pos,
         )?;
         let projected = proj(&attn_out, &self.wo)?;
         add_elementwise(x, &projected)
@@ -210,7 +237,14 @@ impl TransformerBlock {
         q = q.reshape(vec![seq, self.n_heads * head_dim_q])?;
         k = k.reshape(vec![seq, self.n_kv_heads * head_dim_k])?;
         let attn_out = cached_attention_prefill(
-            cache, layer, start_pos, &q, &k, &v, self.n_heads, self.n_kv_heads,
+            cache,
+            layer,
+            start_pos,
+            &q,
+            &k,
+            &v,
+            self.n_heads,
+            self.n_kv_heads,
         )?;
         let projected = proj(&attn_out, &self.wo)?;
         add_elementwise(x, &projected)
@@ -218,70 +252,76 @@ impl TransformerBlock {
 
     fn attention_sublayer_decode(
         &self,
-        x:     &Tensor<f32>,
-        pos:   usize,
+        x: &Tensor<f32>,
+        pos: usize,
         cache: &mut KvCache,
         layer: usize,
     ) -> Result<Tensor<f32>> {
         let normed = rmsnorm(x, &self.attn_norm, self.rms_norm_eps)?;
         let mut q = proj(&normed, &self.wq)?;
         let mut k = proj(&normed, &self.wk)?;
-        let v     = proj(&normed, &self.wv)?;
+        let v = proj(&normed, &self.wv)?;
         let head_dim_q = q.dims()[1] / self.n_heads;
         let head_dim_k = k.dims()[1] / self.n_kv_heads;
-        q = q.reshape(vec![1, self.n_heads,    head_dim_q])?;
+        q = q.reshape(vec![1, self.n_heads, head_dim_q])?;
         k = k.reshape(vec![1, self.n_kv_heads, head_dim_k])?;
         rope_apply(&mut q, &self.rope_table, pos)?;
         rope_apply(&mut k, &self.rope_table, pos)?;
-        q = q.reshape(vec![1, self.n_heads    * head_dim_q])?;
+        q = q.reshape(vec![1, self.n_heads * head_dim_q])?;
         k = k.reshape(vec![1, self.n_kv_heads * head_dim_k])?;
-        let attn_out = cached_attention_decode(
-            cache, layer, pos, &q, &k, &v, self.n_heads, self.n_kv_heads,
-        )?;
+        let attn_out =
+            cached_attention_decode(cache, layer, pos, &q, &k, &v, self.n_heads, self.n_kv_heads)?;
         let projected = proj(&attn_out, &self.wo)?;
         add_elementwise(x, &projected)
     }
 
     fn attention_sublayer_cached_parallel(
         &self,
-        x:         &Tensor<f32>,
+        x: &Tensor<f32>,
         start_pos: usize,
-        cache:     &mut KvCache,
-        layer:     usize,
+        cache: &mut KvCache,
+        layer: usize,
     ) -> Result<Tensor<f32>> {
         let seq = x.dims()[0];
         let normed = rmsnorm(x, &self.attn_norm, self.rms_norm_eps)?;
         let mut q = proj_par(&normed, &self.wq)?;
         let mut k = proj_par(&normed, &self.wk)?;
-        let v     = proj_par(&normed, &self.wv)?;
+        let v = proj_par(&normed, &self.wv)?;
         let head_dim_q = q.dims()[1] / self.n_heads;
         let head_dim_k = k.dims()[1] / self.n_kv_heads;
-        q = q.reshape(vec![seq, self.n_heads,    head_dim_q])?;
+        q = q.reshape(vec![seq, self.n_heads, head_dim_q])?;
         k = k.reshape(vec![seq, self.n_kv_heads, head_dim_k])?;
         rope_apply(&mut q, &self.rope_table, start_pos)?;
         rope_apply(&mut k, &self.rope_table, start_pos)?;
-        q = q.reshape(vec![seq, self.n_heads    * head_dim_q])?;
+        q = q.reshape(vec![seq, self.n_heads * head_dim_q])?;
         k = k.reshape(vec![seq, self.n_kv_heads * head_dim_k])?;
         let attn_out = cached_attention_prefill(
-            cache, layer, start_pos, &q, &k, &v, self.n_heads, self.n_kv_heads,
+            cache,
+            layer,
+            start_pos,
+            &q,
+            &k,
+            &v,
+            self.n_heads,
+            self.n_kv_heads,
         )?;
         let projected = proj_par(&attn_out, &self.wo)?;
         add_elementwise(x, &projected)
     }
 
     fn ffn_sublayer_parallel(&self, x: &Tensor<f32>) -> Result<Tensor<f32>> {
-        let normed  = rmsnorm(x, &self.ffn_norm, self.rms_norm_eps)?;
-        let gate    = proj_par(&normed, &self.wgate)?;
-        let up      = proj_par(&normed, &self.wup)?;
-        let hidden  = swiglu(&gate, &up)?;
+        let normed = rmsnorm(x, &self.ffn_norm, self.rms_norm_eps)?;
+        let gate = proj_par(&normed, &self.wgate)?;
+        let up = proj_par(&normed, &self.wup)?;
+        let hidden = swiglu(&gate, &up)?;
         let ffn_out = proj_par(&hidden, &self.wdown)?;
         add_elementwise(x, &ffn_out)
     }
 
     fn ffn_sublayer(&self, x: &Tensor<f32>) -> Result<Tensor<f32>> {
-        let normed  = rmsnorm(x, &self.ffn_norm, self.rms_norm_eps)?;
+        let normed = rmsnorm(x, &self.ffn_norm, self.rms_norm_eps)?;
         let gate = proj(&normed, &self.wgate)?;
-        let up   = proj(&normed, &self.wup)?;
+        let up = proj(&normed, &self.wup)?;
         let hidden = swiglu(&gate, &up)?;
         let ffn_out = proj(&hidden, &self.wdown)?;
         add_elementwise(x, &ffn_out)
@@ -322,7 +362,11 @@ fn add_elementwise(a: &Tensor<f32>, b: &Tensor<f32>) -> Result<Tensor<f32>> {
     } else {
         std::borrow::Cow::Owned(b.contiguous().as_slice().to_vec())
     };
-    let result: Vec<f32> = a_data.iter().zip(b_data.iter()).map(|(x, y)| x + y).collect();
+    let result: Vec<f32> = a_data
+        .iter()
+        .zip(b_data.iter())
+        .map(|(x, y)| x + y)
+        .collect();
     Ok(Tensor::from_vec(result, a.shape().clone())?)
 }
 
@@ -332,9 +376,14 @@ fn add_elementwise(a: &Tensor<f32>, b: &Tensor<f32>) -> Result<Tensor<f32>> {
 mod tests {
     use super::*;
 
-    fn make_block(embed: usize, n_heads: usize, n_kv_heads: usize, ffn_dim: usize) -> TransformerBlock {
+    fn make_block(
+        embed: usize,
+        n_heads: usize,
+        n_kv_heads: usize,
+        ffn_dim: usize,
+    ) -> TransformerBlock {
         let head_dim = embed / n_heads;
-        let q_dim  = n_heads * head_dim;
+        let q_dim = n_heads * head_dim;
         let kv_dim = n_kv_heads * head_dim;
         TransformerBlock::new(
             Tensor::zeros(vec![q_dim, embed]),
@@ -347,7 +396,9 @@ mod tests {
             Tensor::zeros(vec![embed, ffn_dim]),
             Tensor::ones(vec![embed]),
             RopeTable::new(512, head_dim, 10_000.0),
-            n_heads, n_kv_heads, 1e-5,
+            n_heads,
+            n_kv_heads,
+            1e-5,
         )
     }
 
@@ -381,7 +432,8 @@ mod tests {
     #[test]
     fn test_block_no_nan_or_inf() {
         let block = make_block(8, 2, 2, 16);
-        let x = Tensor::from_vec(vec![1.0,-1.0,0.5,-0.5,2.0,-2.0,0.1,-0.1], vec![1,8]).unwrap();
+        let x =
+            Tensor::from_vec(vec![1.0, -1.0, 0.5, -0.5, 2.0, -2.0, 0.1, -0.1], vec![1, 8]).unwrap();
         let out = block.forward(&x, 0).unwrap();
         for (i, &v) in out.as_slice().iter().enumerate() {
             assert!(!v.is_nan(), "NaN at {i}");
@@ -409,7 +461,9 @@ mod tests {
         let x = Tensor::from_vec((0..48).map(|i| i as f32 * 0.01).collect(), vec![6, 8]).unwrap();
         let out = block.forward(&x, 0).unwrap();
         assert_eq!(out.dims(), &[6, 8]);
-        for &v in out.as_slice() { assert!(!v.is_nan()); }
+        for &v in out.as_slice() {
+            assert!(!v.is_nan());
+        }
     }
 
     // ── forward_cached: shape and no-nan ────────────────────────────────
@@ -436,11 +490,16 @@ mod tests {
         let block = make_block(embed, n_heads, n_kv_heads, 16);
         let mut cache = KvCache::new(1, 64, n_kv_heads, head_dim);
         let x = Tensor::from_vec(
-            (0..2*embed).map(|i| i as f32 * 0.1).collect(), vec![2, embed]
-        ).unwrap();
+            (0..2 * embed).map(|i| i as f32 * 0.1).collect(),
+            vec![2, embed],
+        )
+        .unwrap();
         let out = block.forward_cached(&x, 0, &mut cache, 0).unwrap();
         for &v in out.as_slice() {
-            assert!(!v.is_nan() && !v.is_infinite(), "non-finite in cached output");
+            assert!(
+                !v.is_nan() && !v.is_infinite(),
+                "non-finite in cached output"
+            );
         }
     }
 
@@ -462,8 +521,16 @@ mod tests {
         let mut cache = KvCache::new(1, 64, n_kv_heads, head_dim);
         let out_cached = block.forward_cached(&x, 0, &mut cache, 0).unwrap();
 
-        for (i, (&a, &b)) in out_plain.as_slice().iter().zip(out_cached.as_slice()).enumerate() {
-            assert!((a - b).abs() < 1e-5, "mismatch at {i}: plain={a} cached={b}");
+        for (i, (&a, &b)) in out_plain
+            .as_slice()
+            .iter()
+            .zip(out_cached.as_slice())
+            .enumerate()
+        {
+            assert!(
+                (a - b).abs() < 1e-5,
+                "mismatch at {i}: plain={a} cached={b}"
+            );
         }
     }
 
@@ -471,12 +538,12 @@ mod tests {
 
     #[test]
     fn test_forward_decode_output_shape() {
-        let embed      = 8_usize;
-        let n_heads    = 2_usize;
+        let embed = 8_usize;
+        let n_heads = 2_usize;
         let n_kv_heads = 2_usize;
-        let head_dim   = embed / n_heads;
-        let block      = make_block(embed, n_heads, n_kv_heads, 16);
-        let mut cache  = KvCache::new(1, 64, n_kv_heads, head_dim);
+        let head_dim = embed / n_heads;
+        let block = make_block(embed, n_heads, n_kv_heads, 16);
+        let mut cache = KvCache::new(1, 64, n_kv_heads, head_dim);
         let x = Tensor::from_vec(vec![0.3_f32; embed], vec![1, embed]).unwrap();
         let out = block.forward_decode(&x, 0, &mut cache, 0).unwrap();
         assert_eq!(out.dims(), &[1, embed]);
@@ -484,18 +551,20 @@ mod tests {
 
     #[test]
     fn test_forward_decode_no_nan() {
-        let embed      = 8_usize;
-        let n_heads    = 2_usize;
+        let embed = 8_usize;
+        let n_heads = 2_usize;
         let n_kv_heads = 2_usize;
-        let head_dim   = embed / n_heads;
-        let block      = make_block(embed, n_heads, n_kv_heads, 16);
-        let mut cache  = KvCache::new(1, 64, n_kv_heads, head_dim);
-        let x = Tensor::from_vec(
-            (0..embed).map(|i| i as f32 * 0.1).collect(), vec![1, embed],
-        ).unwrap();
+        let head_dim = embed / n_heads;
+        let block = make_block(embed, n_heads, n_kv_heads, 16);
+        let mut cache = KvCache::new(1, 64, n_kv_heads, head_dim);
+        let x =
+            Tensor::from_vec((0..embed).map(|i| i as f32 * 0.1).collect(), vec![1, embed]).unwrap();
         let out = block.forward_decode(&x, 0, &mut cache, 0).unwrap();
         for &v in out.as_slice() {
-            assert!(!v.is_nan() && !v.is_infinite(), "non-finite in decode output");
+            assert!(
+                !v.is_nan() && !v.is_infinite(),
+                "non-finite in decode output"
+            );
         }
     }
 
@@ -503,11 +572,11 @@ mod tests {
     /// forward pass: both add zero projections to x, leaving x unchanged.
     #[test]
     fn test_forward_decode_matches_forward_zero_weights() {
-        let embed      = 8_usize;
-        let n_heads    = 2_usize;
+        let embed = 8_usize;
+        let n_heads = 2_usize;
         let n_kv_heads = 2_usize;
-        let head_dim   = embed / n_heads;
-        let block      = make_block(embed, n_heads, n_kv_heads, 16);
+        let head_dim = embed / n_heads;
+        let block = make_block(embed, n_heads, n_kv_heads, 16);
 
         let data: Vec<f32> = (0..embed).map(|i| (i + 1) as f32 * 0.05).collect();
         let x = Tensor::from_vec(data.clone(), vec![1, embed]).unwrap();
@@ -517,8 +586,16 @@ mod tests {
         let mut cache = KvCache::new(1, 64, n_kv_heads, head_dim);
         let out_decode = block.forward_decode(&x, 0, &mut cache, 0).unwrap();
 
-        for (i, (&a, &b)) in out_plain.as_slice().iter().zip(out_decode.as_slice()).enumerate() {
-            assert!((a - b).abs() < 1e-5, "decode mismatch at {i}: forward={a} decode={b}");
+        for (i, (&a, &b)) in out_plain
+            .as_slice()
+            .iter()
+            .zip(out_decode.as_slice())
+            .enumerate()
+        {
+            assert!(
+                (a - b).abs() < 1e-5,
+                "decode mismatch at {i}: forward={a} decode={b}"
+            );
         }
     }
 
@@ -526,28 +603,30 @@ mod tests {
 
     #[test]
     fn test_forward_cached_parallel_output_shape() {
-        let embed      = 8_usize;
-        let n_heads    = 2_usize;
+        let embed = 8_usize;
+        let n_heads = 2_usize;
         let n_kv_heads = 2_usize;
-        let head_dim   = embed / n_heads;
-        let block      = make_block(embed, n_heads, n_kv_heads, 16);
-        let mut cache  = KvCache::new(1, 64, n_kv_heads, head_dim);
-        let x   = Tensor::from_vec(vec![0.5_f32; 4 * embed], vec![4, embed]).unwrap();
+        let head_dim = embed / n_heads;
+        let block = make_block(embed, n_heads, n_kv_heads, 16);
+        let mut cache = KvCache::new(1, 64, n_kv_heads, head_dim);
+        let x = Tensor::from_vec(vec![0.5_f32; 4 * embed], vec![4, embed]).unwrap();
         let out = block.forward_cached_parallel(&x, 0, &mut cache, 0).unwrap();
         assert_eq!(out.dims(), &[4, embed]);
     }
 
     #[test]
     fn test_forward_cached_parallel_no_nan() {
-        let embed      = 8_usize;
-        let n_heads    = 2_usize;
+        let embed = 8_usize;
+        let n_heads = 2_usize;
         let n_kv_heads = 2_usize;
-        let head_dim   = embed / n_heads;
-        let block      = make_block(embed, n_heads, n_kv_heads, 16);
-        let mut cache  = KvCache::new(1, 64, n_kv_heads, head_dim);
+        let head_dim = embed / n_heads;
+        let block = make_block(embed, n_heads, n_kv_heads, 16);
+        let mut cache = KvCache::new(1, 64, n_kv_heads, head_dim);
         let x = Tensor::from_vec(
-            (0..3 * embed).map(|i| i as f32 * 0.1).collect(), vec![3, embed],
-        ).unwrap();
+            (0..3 * embed).map(|i| i as f32 * 0.1).collect(),
+            vec![3, embed],
+        )
+        .unwrap();
         let out = block.forward_cached_parallel(&x, 0, &mut cache, 0).unwrap();
         for &v in out.as_slice() {
             assert!(!v.is_nan() && !v.is_infinite());
@@ -557,11 +636,11 @@ mod tests {
     /// For zero-weight blocks, parallel and sequential paths must agree.
     #[test]
     fn test_forward_cached_parallel_matches_sequential() {
-        let embed      = 8_usize;
-        let n_heads    = 2_usize;
+        let embed = 8_usize;
+        let n_heads = 2_usize;
         let n_kv_heads = 2_usize;
-        let head_dim   = embed / n_heads;
-        let block      = make_block(embed, n_heads, n_kv_heads, 16);
+        let head_dim = embed / n_heads;
+        let block = make_block(embed, n_heads, n_kv_heads, 16);
 
         let data: Vec<f32> = (0..4 * embed).map(|i| i as f32 * 0.05).collect();
         let x = Tensor::from_vec(data.clone(), vec![4, embed]).unwrap();
@@ -570,11 +649,17 @@ mod tests {
         let out_seq = block.forward_cached(&x, 0, &mut cache_seq, 0).unwrap();
 
         let mut cache_par = KvCache::new(1, 64, n_kv_heads, head_dim);
-        let out_par = block.forward_cached_parallel(&x, 0, &mut cache_par, 0).unwrap();
+        let out_par = block
+            .forward_cached_parallel(&x, 0, &mut cache_par, 0)
+            .unwrap();
 
-        for (i, (&s, &p)) in out_seq.as_slice().iter().zip(out_par.as_slice()).enumerate() {
-            assert!((s - p).abs() < 1e-4,
-                "mismatch at [{i}]: seq={s} par={p}");
+        for (i, (&s, &p)) in out_seq
+            .as_slice()
+            .iter()
+            .zip(out_par.as_slice())
+            .enumerate()
+        {
+            assert!((s - p).abs() < 1e-4, "mismatch at [{i}]: seq={s} par={p}");
         }
     }
 }

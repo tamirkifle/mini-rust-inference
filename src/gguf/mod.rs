@@ -54,8 +54,8 @@
 //! - [llama.cpp](https://github.com/ggerganov/llama.cpp)
 
 pub mod cache;
-mod dtype;
 pub mod dequant;
+mod dtype;
 mod error;
 mod extract;
 pub mod f16;
@@ -76,8 +76,7 @@ pub use mmap::{MappedFile, MappedSlice};
 
 // Tensor extraction
 pub use extract::{
-    extract_f32_from_bytes, extract_f32_into, validate_tensor_data, ExtractionInfo,
-    TensorExtractor,
+    extract_f32_from_bytes, extract_f32_into, validate_tensor_data, ExtractionInfo, TensorExtractor,
 };
 
 // F16 (half-precision) support
@@ -94,8 +93,7 @@ pub use quantization::{
 
 // Tensor info utilities
 pub use tensor_info::{
-    align_offset, padding_for_alignment, TensorInfo, TensorInfos, TensorSummary,
-    DEFAULT_ALIGNMENT,
+    align_offset, padding_for_alignment, TensorInfo, TensorInfos, TensorSummary, DEFAULT_ALIGNMENT,
 };
 
 // Reader utilities are used internally by submodules via `super::header::`
@@ -174,7 +172,7 @@ mod tests {
 
     #[test]
     fn test_extract_f32_bytes() {
-        let values: Vec<f32> = vec![1.0, 2.5, -3.14, 0.0];
+        let values: Vec<f32> = vec![1.0, 2.5, -std::f32::consts::PI, 0.0];
         let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
 
         let extracted = extract_f32_from_bytes(&bytes).unwrap();

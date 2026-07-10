@@ -192,7 +192,8 @@ impl MappedFile {
         if offset.saturating_add(len) > self.mmap.len() {
             return Ok(());
         }
-        self.mmap.advise_range(memmap2::Advice::WillNeed, offset, len)
+        self.mmap
+            .advise_range(memmap2::Advice::WillNeed, offset, len)
     }
 
     /// Non-Unix platforms: no-op
@@ -441,7 +442,7 @@ mod tests {
 
         // Should return None for unaligned/wrong-sized data
         // Note: as_f32() checks both alignment and size
-        assert!(slice.as_f32().is_none() || slice.len() % 4 != 0);
+        assert!(slice.as_f32().is_none() || !slice.len().is_multiple_of(4));
     }
 
     #[test]

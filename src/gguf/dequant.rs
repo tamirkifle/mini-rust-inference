@@ -394,17 +394,10 @@ pub fn create_q8_0_block(values: &[f32]) -> [u8; Q8_0_BLOCK_SIZE] {
     );
 
     // Find maximum absolute value for scale calculation
-    let max_abs = values
-        .iter()
-        .map(|v| v.abs())
-        .fold(0.0f32, |a, b| a.max(b));
+    let max_abs = values.iter().map(|v| v.abs()).fold(0.0f32, |a, b| a.max(b));
 
     // Calculate scale (map max_abs to 127)
-    let scale = if max_abs == 0.0 {
-        0.0
-    } else {
-        max_abs / 127.0
-    };
+    let scale = if max_abs == 0.0 { 0.0 } else { max_abs / 127.0 };
 
     // Convert scale to F16
     let scale_f16 = super::quantization::f32_to_f16(scale);
@@ -718,17 +711,10 @@ pub fn create_q4_0_block(values: &[f32]) -> [u8; Q4_0_BLOCK_SIZE] {
     );
 
     // Find maximum absolute value for scale calculation
-    let max_abs = values
-        .iter()
-        .map(|v| v.abs())
-        .fold(0.0f32, |a, b| a.max(b));
+    let max_abs = values.iter().map(|v| v.abs()).fold(0.0f32, |a, b| a.max(b));
 
     // Calculate scale (map max_abs to 7, the max positive value in 4-bit signed)
-    let scale = if max_abs == 0.0 {
-        0.0
-    } else {
-        max_abs / 7.0
-    };
+    let scale = if max_abs == 0.0 { 0.0 } else { max_abs / 7.0 };
 
     // Convert scale to F16
     let scale_f16 = super::quantization::f32_to_f16(scale);
@@ -1183,8 +1169,8 @@ mod tests {
     fn test_dequantize_q4_0_block() {
         let mut block = [0u8; 18];
         block[0..2].copy_from_slice(&0x3C00u16.to_le_bytes()); // scale=1.0
-        // Create sequential values: 0, 1, 2, 3, 4, 5, 6, 7, -8, -7, ...
-        // This requires nibbles: 8, 9, 10, 11, 12, 13, 14, 15, 0, 1, ...
+                                                               // Create sequential values: 0, 1, 2, 3, 4, 5, 6, 7, -8, -7, ...
+                                                               // This requires nibbles: 8, 9, 10, 11, 12, 13, 14, 15, 0, 1, ...
         for i in 0..16 {
             let low = ((i * 2) % 16) as u8; // Will wrap: 0,2,4,6,8,10,12,14,0,2,...
             let high = ((i * 2 + 1) % 16) as u8;

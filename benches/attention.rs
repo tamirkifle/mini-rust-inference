@@ -11,9 +11,7 @@
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 
-use llm_engine::attention::{
-    grouped_query_attention_causal, scaled_dot_product_attention,
-};
+use llm_engine::attention::{grouped_query_attention_causal, scaled_dot_product_attention};
 use llm_engine::ops::norm::{rmsnorm, rmsnorm_simd};
 use llm_engine::ops::softmax::softmax;
 use llm_engine::ops::softmax_simd::softmax_simd;
@@ -61,9 +59,9 @@ fn bench_sdpa(c: &mut Criterion) {
 fn bench_gqa(c: &mut Criterion) {
     let mut group = c.benchmark_group("gqa_causal");
 
-    let n_heads    = 8_usize;
+    let n_heads = 8_usize;
     let n_kv_heads = 2_usize;
-    let d_k        = 64_usize;
+    let d_k = 64_usize;
 
     for &seq in &[32usize, 128, 512] {
         let q = make_f32(seq, n_heads * d_k);
@@ -74,9 +72,7 @@ fn bench_gqa(c: &mut Criterion) {
         group.throughput(Throughput::Elements((n_heads * seq * seq) as u64));
 
         group.bench_with_input(BenchmarkId::new("seq", seq), &seq, |bench, _| {
-            bench.iter(|| {
-                grouped_query_attention_causal(&q, &k, &v, n_heads, n_kv_heads).unwrap()
-            });
+            bench.iter(|| grouped_query_attention_causal(&q, &k, &v, n_heads, n_kv_heads).unwrap());
         });
     }
 

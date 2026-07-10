@@ -100,7 +100,10 @@ impl ScaledRopeTable {
     /// * `scale ≤ 0`.
     #[must_use]
     pub fn new(max_seq_len: usize, head_dim: usize, base: f32, scaling: RopeScaling) -> Self {
-        assert!(head_dim > 0 && head_dim % 2 == 0, "head_dim must be a positive even number");
+        assert!(
+            head_dim > 0 && head_dim % 2 == 0,
+            "head_dim must be a positive even number"
+        );
         if let RopeScaling::NtkAware { .. } = &scaling {
             assert!(head_dim >= 4, "NTK-aware scaling requires head_dim >= 4");
         }
@@ -141,7 +144,14 @@ impl ScaledRopeTable {
             }
         }
 
-        Self { cos, sin, max_seq_len, head_dim, base, scaling }
+        Self {
+            cos,
+            sin,
+            max_seq_len,
+            head_dim,
+            base,
+            scaling,
+        }
     }
 
     /// Cosine value for `(position, pair_index)`.
@@ -180,7 +190,8 @@ pub fn rope_apply_scaled(
         return Err(TensorError::InvalidShape {
             reason: format!(
                 "rope_apply_scaled: expected 3-D [seq, n_heads, head_dim], got {}D {:?}",
-                x.ndim(), x.dims()
+                x.ndim(),
+                x.dims()
             ),
         });
     }
@@ -228,7 +239,7 @@ pub fn rope_apply_scaled(
                 let sn = table.sin(pos, i);
                 let x0 = data[base_idx + 2 * i];
                 let x1 = data[base_idx + 2 * i + 1];
-                data[base_idx + 2 * i]     = x0 * c - x1 * sn;
+                data[base_idx + 2 * i] = x0 * c - x1 * sn;
                 data[base_idx + 2 * i + 1] = x1 * c + x0 * sn;
             }
         }
@@ -247,7 +258,11 @@ pub fn rope_apply_scaled_copy(
     table: &ScaledRopeTable,
     start_pos: usize,
 ) -> Result<Tensor<f32>> {
-    let mut out = if x.is_contiguous() { x.clone() } else { x.contiguous() };
+    let mut out = if x.is_contiguous() {
+        x.clone()
+    } else {
+        x.contiguous()
+    };
     rope_apply_scaled(&mut out, table, start_pos)?;
     Ok(out)
 }
@@ -257,9 +272,11 @@ pub fn rope_apply_scaled_copy(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ops::rope::{RopeTable, rope_apply};
+    use crate::ops::rope::{rope_apply, RopeTable};
 
-    fn close(a: f32, b: f32, tol: f32) -> bool { (a - b).abs() < tol }
+    fn close(a: f32, b: f32, tol: f32) -> bool {
+        (a - b).abs() < tol
+    }
     fn close_slice(a: &[f32], b: &[f32], tol: f32) -> bool {
         a.len() == b.len() && a.iter().zip(b).all(|(x, y)| close(*x, *y, tol))
     }
@@ -273,7 +290,8 @@ mod tests {
         let data: Vec<f32> = (0..head_dim).map(|i| i as f32 + 1.0).collect();
 
         let std_table = RopeTable::new(16, head_dim, base);
-        let scaled_table = ScaledRopeTable::new(16, head_dim, base, RopeScaling::Linear { scale: 1.0 });
+        let scaled_table =
+            ScaledRopeTable::new(16, head_dim, base, RopeScaling::Linear { scale: 1.0 });
 
         let mut x_std = Tensor::from_vec(data.clone(), vec![1, 1, head_dim]).unwrap();
         let mut x_scaled = Tensor::from_vec(data, vec![1, 1, head_dim]).unwrap();
@@ -281,8 +299,10 @@ mod tests {
         rope_apply(&mut x_std, &std_table, 3).unwrap();
         rope_apply_scaled(&mut x_scaled, &scaled_table, 3).unwrap();
 
-        assert!(close_slice(x_std.as_slice(), x_scaled.as_slice(), 1e-5),
-            "linear scale=1 should match standard RoPE");
+        assert!(
+            close_slice(x_std.as_slice(), x_scaled.as_slice(), 1e-5),
+            "linear scale=1 should match standard RoPE"
+        );
     }
 
     #[test]
@@ -292,7 +312,8 @@ mod tests {
         let data: Vec<f32> = (0..head_dim).map(|i| i as f32 + 1.0).collect();
 
         let std_table = RopeTable::new(16, head_dim, base);
-        let scaled_table = ScaledRopeTable::new(16, head_dim, base, RopeScaling::NtkAware { scale: 1.0 });
+        let scaled_table =
+            ScaledRopeTable::new(16, head_dim, base, RopeScaling::NtkAware { scale: 1.0 });
 
         let mut x_std = Tensor::from_vec(data.clone(), vec![1, 1, head_dim]).unwrap();
         let mut x_scaled = Tensor::from_vec(data, vec![1, 1, head_dim]).unwrap();
@@ -300,8 +321,10 @@ mod tests {
         rope_apply(&mut x_std, &std_table, 3).unwrap();
         rope_apply_scaled(&mut x_scaled, &scaled_table, 3).unwrap();
 
-        assert!(close_slice(x_std.as_slice(), x_scaled.as_slice(), 1e-4),
-            "ntk scale=1 should match standard RoPE");
+        assert!(
+            close_slice(x_std.as_slice(), x_scaled.as_slice(), 1e-4),
+            "ntk scale=1 should match standard RoPE"
+        );
     }
 
     // ── linear: pos/2 equals applying standard at half the position ──────
@@ -314,16 +337,19 @@ mod tests {
 
         // Linear scale=2, position=4 should equal standard RoPE at position=2
         let std_table = RopeTable::new(16, head_dim, base);
-        let scaled_table = ScaledRopeTable::new(16, head_dim, base, RopeScaling::Linear { scale: 2.0 });
+        let scaled_table =
+            ScaledRopeTable::new(16, head_dim, base, RopeScaling::Linear { scale: 2.0 });
 
         let mut x_std = Tensor::from_vec(data.clone(), vec![1, 1, head_dim]).unwrap();
         let mut x_scaled = Tensor::from_vec(data, vec![1, 1, head_dim]).unwrap();
 
-        rope_apply(&mut x_std, &std_table, 2).unwrap();        // effective pos = 2
+        rope_apply(&mut x_std, &std_table, 2).unwrap(); // effective pos = 2
         rope_apply_scaled(&mut x_scaled, &scaled_table, 4).unwrap(); // 4 / scale=2 = 2
 
-        assert!(close_slice(x_std.as_slice(), x_scaled.as_slice(), 1e-5),
-            "linear scale=2 at pos=4 should match standard at pos=2");
+        assert!(
+            close_slice(x_std.as_slice(), x_scaled.as_slice(), 1e-5),
+            "linear scale=2 at pos=4 should match standard at pos=2"
+        );
     }
 
     // ── NTK: norm preservation ────────────────────────────────────────────
@@ -334,13 +360,16 @@ mod tests {
         let data: Vec<f32> = (0..head_dim).map(|i| i as f32 + 1.0).collect();
         let norm_before: f32 = data.iter().map(|v| v * v).sum::<f32>().sqrt();
 
-        let table = ScaledRopeTable::new(64, head_dim, 10_000.0, RopeScaling::NtkAware { scale: 4.0 });
+        let table =
+            ScaledRopeTable::new(64, head_dim, 10_000.0, RopeScaling::NtkAware { scale: 4.0 });
         let mut x = Tensor::from_vec(data, vec![1, 1, head_dim]).unwrap();
         rope_apply_scaled(&mut x, &table, 37).unwrap();
 
         let norm_after: f32 = x.as_slice().iter().map(|v| v * v).sum::<f32>().sqrt();
-        assert!(close(norm_before, norm_after, 1e-5),
-            "norm changed: {norm_before} → {norm_after}");
+        assert!(
+            close(norm_before, norm_after, 1e-5),
+            "norm changed: {norm_before} → {norm_after}"
+        );
     }
 
     // ── linear: norm preservation ─────────────────────────────────────────
@@ -351,13 +380,16 @@ mod tests {
         let data: Vec<f32> = (0..head_dim).map(|i| i as f32 + 1.0).collect();
         let norm_before: f32 = data.iter().map(|v| v * v).sum::<f32>().sqrt();
 
-        let table = ScaledRopeTable::new(64, head_dim, 10_000.0, RopeScaling::Linear { scale: 2.0 });
+        let table =
+            ScaledRopeTable::new(64, head_dim, 10_000.0, RopeScaling::Linear { scale: 2.0 });
         let mut x = Tensor::from_vec(data, vec![1, 1, head_dim]).unwrap();
         rope_apply_scaled(&mut x, &table, 20).unwrap();
 
         let norm_after: f32 = x.as_slice().iter().map(|v| v * v).sum::<f32>().sqrt();
-        assert!(close(norm_before, norm_after, 1e-5),
-            "linear norm changed: {norm_before} → {norm_after}");
+        assert!(
+            close(norm_before, norm_after, 1e-5),
+            "linear norm changed: {norm_before} → {norm_after}"
+        );
     }
 
     // ── position-0 is identity for both strategies ────────────────────────
@@ -376,7 +408,8 @@ mod tests {
     fn test_ntk_pos0_identity() {
         let head_dim = 4;
         let data = vec![1.0_f32, 2.0, 3.0, 4.0];
-        let table = ScaledRopeTable::new(8, head_dim, 10_000.0, RopeScaling::NtkAware { scale: 3.0 });
+        let table =
+            ScaledRopeTable::new(8, head_dim, 10_000.0, RopeScaling::NtkAware { scale: 3.0 });
         let mut x = Tensor::from_vec(data.clone(), vec![1, 1, head_dim]).unwrap();
         rope_apply_scaled(&mut x, &table, 0).unwrap();
         assert!(close_slice(x.as_slice(), &data, 1e-6));
@@ -389,10 +422,15 @@ mod tests {
         let head_dim = 4;
         let n_heads = 3;
         let single_data = vec![1.0_f32, 2.0, 3.0, 4.0];
-        let multi_data: Vec<f32> = single_data.iter().cloned()
-            .cycle().take(n_heads * head_dim).collect();
+        let multi_data: Vec<f32> = single_data
+            .iter()
+            .cloned()
+            .cycle()
+            .take(n_heads * head_dim)
+            .collect();
 
-        let table = ScaledRopeTable::new(8, head_dim, 10_000.0, RopeScaling::NtkAware { scale: 2.0 });
+        let table =
+            ScaledRopeTable::new(8, head_dim, 10_000.0, RopeScaling::NtkAware { scale: 2.0 });
 
         let mut single = Tensor::from_vec(single_data, vec![1, 1, head_dim]).unwrap();
         let mut multi = Tensor::from_vec(multi_data, vec![1, n_heads, head_dim]).unwrap();
@@ -403,11 +441,14 @@ mod tests {
         // Every head in multi should match the single-head result
         for h in 0..n_heads {
             let start = h * head_dim;
-            assert!(close_slice(
-                &multi.as_slice()[start..start + head_dim],
-                single.as_slice(),
-                1e-6,
-            ), "head {h} mismatch");
+            assert!(
+                close_slice(
+                    &multi.as_slice()[start..start + head_dim],
+                    single.as_slice(),
+                    1e-6,
+                ),
+                "head {h} mismatch"
+            );
         }
     }
 
@@ -485,8 +526,14 @@ mod tests {
         // *smaller* angle in NTK table (bigger base → smaller θ₀)
         let pair = 0;
         let pos = 100;
-        let std_angle = std_table.sin(pos, pair).atan2(std_table.cos(pos, pair)).abs();
-        let ntk_angle = ntk_table.sin(pos, pair).atan2(ntk_table.cos(pos, pair)).abs();
+        let std_angle = std_table
+            .sin(pos, pair)
+            .atan2(std_table.cos(pos, pair))
+            .abs();
+        let ntk_angle = ntk_table
+            .sin(pos, pair)
+            .atan2(ntk_table.cos(pos, pair))
+            .abs();
 
         // Both are mod 2π so we just check they differ (NTK rotates more slowly)
         // At pair=0 with pos=100 the angle will have wrapped; just confirm they differ

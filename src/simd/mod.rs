@@ -18,9 +18,9 @@
 //! | aarch64      | NEON       | Always enabled (mandatory AArch64 ABI)        |
 //! | other        | Scalar     | Pure Rust fallback                            |
 
+pub mod dispatch;
 #[allow(clippy::module_inception)]
-pub mod f32;      // commit-15.1 — vectorized f32 primitives
-pub mod dispatch; // commit-15.4 — runtime CPU detection + kernel selection
+pub mod f32; // commit-15.1 — vectorized f32 primitives // commit-15.4 — runtime CPU detection + kernel selection
 
-pub use self::f32::{hsum, dot, add_into, mul_into, scale_into, fma_into};
-pub use dispatch::{CpuFeatures, Kernels, global_kernels};
+pub use self::f32::{add_into, dot, fma_into, hsum, mul_into, scale_into};
+pub use dispatch::{global_kernels, CpuFeatures, Kernels};

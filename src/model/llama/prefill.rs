@@ -35,9 +35,9 @@
 //! ```
 
 use crate::cache::KvCache;
-use crate::model::{ModelError, Result};
 use crate::model::llama::LlamaModel;
-use crate::ops::{norm::rmsnorm, matmul::matmul_blocked};
+use crate::model::{ModelError, Result};
+use crate::ops::{matmul::matmul_blocked, norm::rmsnorm};
 use crate::tensor::Tensor;
 
 // ── ChunkedPrefill ────────────────────────────────────────────────────────────
@@ -87,9 +87,9 @@ impl ChunkedPrefill {
             });
         }
 
-        let cfg       = model.config();
-        let seq_len   = tokens.len();
-        let max_ctx   = cfg.context_length as usize;
+        let cfg = model.config();
+        let seq_len = tokens.len();
+        let max_ctx = cfg.context_length as usize;
 
         if seq_len > max_ctx {
             return Err(ModelError::InvalidConfig {
@@ -100,9 +100,9 @@ impl ChunkedPrefill {
         }
 
         // Pre-allocate a KV-cache large enough for the entire prompt.
-        let n_layers   = cfg.block_count as usize;
-        let n_kv_heads = cfg.n_kv_heads  as usize;
-        let head_dim   = cfg.head_dim()  as usize;
+        let n_layers = cfg.block_count as usize;
+        let n_kv_heads = cfg.n_kv_heads as usize;
+        let head_dim = cfg.head_dim() as usize;
 
         let mut cache = KvCache::new(n_layers, max_ctx, n_kv_heads, head_dim);
 
@@ -111,7 +111,7 @@ impl ChunkedPrefill {
 
         let mut start = 0_usize;
         while start < seq_len {
-            let end        = (start + self.chunk_size).min(seq_len);
+            let end = (start + self.chunk_size).min(seq_len);
             let chunk_toks = &tokens[start..end];
 
             // 1. Token embedding lookup for this chunk.
@@ -133,7 +133,10 @@ impl ChunkedPrefill {
             start = end;
         }
 
-        Ok(Tensor::from_vec(all_logits, vec![seq_len, cfg.vocab_size as usize])?)
+        Ok(Tensor::from_vec(
+            all_logits,
+            vec![seq_len, cfg.vocab_size as usize],
+        )?)
     }
 }
 
@@ -142,49 +145,55 @@ impl ChunkedPrefill {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::llama::{LlamaModel, LlamaConfig, TransformerBlock};
+    use crate::gguf::{Metadata, MetadataValue};
+    use crate::model::llama::{LlamaConfig, LlamaModel, TransformerBlock};
     use crate::ops::rope::RopeTable;
-    use crate::gguf::{MetadataValue, Metadata};
 
     fn tiny_config() -> LlamaConfig {
         let mut m = Metadata::new();
         for (k, v) in [
-            ("llama.block_count",          MetadataValue::Uint32(2)),
-            ("llama.embedding_length",     MetadataValue::Uint32(8)),
+            ("llama.block_count", MetadataValue::Uint32(2)),
+            ("llama.embedding_length", MetadataValue::Uint32(8)),
             ("llama.attention.head_count", MetadataValue::Uint32(2)),
-            ("llama.feed_forward_length",  MetadataValue::Uint32(16)),
-            ("llama.context_length",       MetadataValue::Uint32(64)),
-            ("llama.vocab_size",           MetadataValue::Uint32(32)),
-        ] { m.insert(k.to_string(), v); }
+            ("llama.feed_forward_length", MetadataValue::Uint32(16)),
+            ("llama.context_length", MetadataValue::Uint32(64)),
+            ("llama.vocab_size", MetadataValue::Uint32(32)),
+        ] {
+            m.insert(k.to_string(), v);
+        }
         LlamaConfig::from_metadata(&m).unwrap()
     }
 
     fn make_model(cfg: &LlamaConfig) -> LlamaModel {
-        let embed  = cfg.embedding_length   as usize;
-        let vocab  = cfg.vocab_size         as usize;
-        let ffn    = cfg.feed_forward_length as usize;
-        let heads  = cfg.n_heads            as usize;
-        let kv     = cfg.n_kv_heads         as usize;
-        let hd     = cfg.head_dim()         as usize;
-        let qd     = heads * hd;
-        let kvd    = kv   * hd;
-        let rope   = RopeTable::new(cfg.context_length as usize, hd, cfg.rope_freq_base);
+        let embed = cfg.embedding_length as usize;
+        let vocab = cfg.vocab_size as usize;
+        let ffn = cfg.feed_forward_length as usize;
+        let heads = cfg.n_heads as usize;
+        let kv = cfg.n_kv_heads as usize;
+        let hd = cfg.head_dim() as usize;
+        let qd = heads * hd;
+        let kvd = kv * hd;
+        let rope = RopeTable::new(cfg.context_length as usize, hd, cfg.rope_freq_base);
 
-        let blocks: Vec<_> = (0..cfg.block_count as usize).map(|_| {
-            TransformerBlock::new(
-                Tensor::zeros(vec![qd,    embed]),
-                Tensor::zeros(vec![kvd,   embed]),
-                Tensor::zeros(vec![kvd,   embed]),
-                Tensor::zeros(vec![embed, qd   ]),
-                Tensor::ones(vec![embed]),
-                Tensor::zeros(vec![ffn,   embed]),
-                Tensor::zeros(vec![ffn,   embed]),
-                Tensor::zeros(vec![embed, ffn  ]),
-                Tensor::ones(vec![embed]),
-                rope.clone(),
-                heads, kv, cfg.rms_norm_eps,
-            )
-        }).collect();
+        let blocks: Vec<_> = (0..cfg.block_count as usize)
+            .map(|_| {
+                TransformerBlock::new(
+                    Tensor::zeros(vec![qd, embed]),
+                    Tensor::zeros(vec![kvd, embed]),
+                    Tensor::zeros(vec![kvd, embed]),
+                    Tensor::zeros(vec![embed, qd]),
+                    Tensor::ones(vec![embed]),
+                    Tensor::zeros(vec![ffn, embed]),
+                    Tensor::zeros(vec![ffn, embed]),
+                    Tensor::zeros(vec![embed, ffn]),
+                    Tensor::ones(vec![embed]),
+                    rope.clone(),
+                    heads,
+                    kv,
+                    cfg.rms_norm_eps,
+                )
+            })
+            .collect();
 
         LlamaModel::new(
             cfg.clone(),
@@ -199,29 +208,29 @@ mod tests {
 
     #[test]
     fn test_chunked_output_shape_single_chunk() {
-        let cfg   = tiny_config();
+        let cfg = tiny_config();
         let model = make_model(&cfg);
-        let p     = ChunkedPrefill::new(8);
-        let out   = p.run(&model, &[0, 1, 2, 3]).unwrap();
+        let p = ChunkedPrefill::new(8);
+        let out = p.run(&model, &[0, 1, 2, 3]).unwrap();
         assert_eq!(out.dims(), &[4, cfg.vocab_size as usize]);
     }
 
     #[test]
     fn test_chunked_output_shape_multi_chunk() {
-        let cfg   = tiny_config();
+        let cfg = tiny_config();
         let model = make_model(&cfg);
         // chunk_size=3 over 8 tokens → chunks [0..3), [3..6), [6..8)
-        let p   = ChunkedPrefill::new(3);
-        let out = p.run(&model, &[0,1,2,3,4,5,6,7]).unwrap();
+        let p = ChunkedPrefill::new(3);
+        let out = p.run(&model, &[0, 1, 2, 3, 4, 5, 6, 7]).unwrap();
         assert_eq!(out.dims(), &[8, cfg.vocab_size as usize]);
     }
 
     #[test]
     fn test_chunked_single_token() {
-        let cfg   = tiny_config();
+        let cfg = tiny_config();
         let model = make_model(&cfg);
-        let p     = ChunkedPrefill::new(4);
-        let out   = p.run(&model, &[5]).unwrap();
+        let p = ChunkedPrefill::new(4);
+        let out = p.run(&model, &[5]).unwrap();
         assert_eq!(out.dims(), &[1, cfg.vocab_size as usize]);
     }
 
@@ -229,12 +238,12 @@ mod tests {
 
     #[test]
     fn test_chunked_no_nan() {
-        let cfg   = tiny_config();
+        let cfg = tiny_config();
         let model = make_model(&cfg);
-        let p     = ChunkedPrefill::new(2);
-        let out   = p.run(&model, &[0,1,2,3,4,5]).unwrap();
+        let p = ChunkedPrefill::new(2);
+        let out = p.run(&model, &[0, 1, 2, 3, 4, 5]).unwrap();
         for &v in out.as_slice() {
-            assert!(!v.is_nan(),      "NaN in chunked logits");
+            assert!(!v.is_nan(), "NaN in chunked logits");
             assert!(!v.is_infinite(), "Inf in chunked logits");
         }
     }
@@ -243,8 +252,8 @@ mod tests {
 
     #[test]
     fn test_chunked_matches_forward_single_chunk() {
-        let cfg    = tiny_config();
-        let model  = make_model(&cfg);
+        let cfg = tiny_config();
+        let model = make_model(&cfg);
         let tokens = &[0u32, 3, 7, 15];
 
         // Full-sequence forward
@@ -255,11 +264,16 @@ mod tests {
         let logits_chunked = p.run(&model, tokens).unwrap();
 
         assert_eq!(logits_full.dims(), logits_chunked.dims());
-        for (i, (&a, &b)) in logits_full.as_slice().iter()
-            .zip(logits_chunked.as_slice()).enumerate()
+        for (i, (&a, &b)) in logits_full
+            .as_slice()
+            .iter()
+            .zip(logits_chunked.as_slice())
+            .enumerate()
         {
-            assert!((a - b).abs() < 1e-4,
-                "logit[{i}] mismatch: forward={a} chunked={b}");
+            assert!(
+                (a - b).abs() < 1e-4,
+                "logit[{i}] mismatch: forward={a} chunked={b}"
+            );
         }
     }
 
@@ -267,17 +281,17 @@ mod tests {
 
     #[test]
     fn test_empty_tokens_rejected() {
-        let cfg   = tiny_config();
+        let cfg = tiny_config();
         let model = make_model(&cfg);
-        let p     = ChunkedPrefill::new(4);
+        let p = ChunkedPrefill::new(4);
         assert!(p.run(&model, &[]).is_err());
     }
 
     #[test]
     fn test_seq_exceeds_context_length_rejected() {
-        let cfg   = tiny_config();
+        let cfg = tiny_config();
         let model = make_model(&cfg);
-        let p     = ChunkedPrefill::new(4);
+        let p = ChunkedPrefill::new(4);
         // context_length = 64; send 65 tokens
         let tokens: Vec<u32> = (0..65).map(|i| i % 32).collect();
         assert!(p.run(&model, &tokens).is_err());

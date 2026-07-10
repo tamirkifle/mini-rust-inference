@@ -167,9 +167,12 @@ impl Layout {
         let new_dims: Vec<usize> = dims
             .iter()
             .map(|&d| {
-                old_dims.get(d).copied().ok_or_else(|| TensorError::InvalidShape {
-                    reason: format!("invalid dimension {d} in permutation"),
-                })
+                old_dims
+                    .get(d)
+                    .copied()
+                    .ok_or_else(|| TensorError::InvalidShape {
+                        reason: format!("invalid dimension {d} in permutation"),
+                    })
             })
             .collect::<Result<_>>()?;
 

@@ -50,12 +50,12 @@ mod avx2_impl {
         // Fold upper 128 bits onto lower 128 bits.
         let lo128 = _mm256_castsi256_si128(v);
         let hi128 = _mm256_extracti128_si256(v, 1);
-        let sum4  = _mm_add_epi32(lo128, hi128);
+        let sum4 = _mm_add_epi32(lo128, hi128);
         // Pair-sum the 4 lanes.
-        let shuf  = _mm_shuffle_epi32(sum4, 0b10_11_00_01); // [b,a,d,c]
-        let sum2  = _mm_add_epi32(sum4, shuf);              // [a+b, _, c+d, _]
+        let shuf = _mm_shuffle_epi32(sum4, 0b10_11_00_01); // [b,a,d,c]
+        let sum2 = _mm_add_epi32(sum4, shuf); // [a+b, _, c+d, _]
         let shuf2 = _mm_shuffle_epi32(sum2, 0b01_00_11_10); // move c+d to lo
-        let sum1  = _mm_add_epi32(sum2, shuf2);
+        let sum1 = _mm_add_epi32(sum2, shuf2);
         _mm_cvtsi128_si32(sum1)
     }
 
@@ -67,11 +67,11 @@ mod avx2_impl {
     /// Caller must guarantee AVX2 is available.
     #[target_feature(enable = "avx2")]
     pub(super) unsafe fn dot_i8(a: &[i8], b: &[i8]) -> i32 {
-        let n      = a.len(); // caller guarantees a.len() == b.len()
+        let n = a.len(); // caller guarantees a.len() == b.len()
         let chunks = n / 32;
-        let ap     = a.as_ptr();
-        let bp     = b.as_ptr();
-        let ones   = _mm256_set1_epi16(1_i16);
+        let ap = a.as_ptr();
+        let bp = b.as_ptr();
+        let ones = _mm256_set1_epi16(1_i16);
         let mut acc = _mm256_setzero_si256();
 
         for i in 0..chunks {
@@ -80,7 +80,7 @@ mod avx2_impl {
             let vb = _mm256_loadu_si256(bp.add(i * 32) as *const __m256i);
 
             // abs(a): treat as u8 so maddubs accepts it as the unsigned arg.
-            let va_abs  = _mm256_abs_epi8(va);
+            let va_abs = _mm256_abs_epi8(va);
             // sign(b, a): negates b[k] where a[k] < 0, zeroes where a[k]==0.
             // Combined with va_abs, this restores the correct signed product:
             //   abs(a[k]) * sign(b[k], a[k]) == a[k] * b[k]
@@ -115,7 +115,10 @@ mod avx2_impl {
 
 #[inline]
 fn dot_i8_scalar(a: &[i8], b: &[i8]) -> i32 {
-    a.iter().zip(b).map(|(&x, &y)| i32::from(x) * i32::from(y)).sum()
+    a.iter()
+        .zip(b)
+        .map(|(&x, &y)| i32::from(x) * i32::from(y))
+        .sum()
 }
 
 // ── public API ────────────────────────────────────────────────────────────
@@ -181,7 +184,10 @@ pub fn matmul_int8_avx2(
         return Err(TensorError::InvalidShape {
             reason: format!(
                 "matmul_int8_avx2: act_q.len()={} != m*k={}*{}={}",
-                act_q.len(), m, k, m * k
+                act_q.len(),
+                m,
+                k,
+                m * k
             ),
         });
     }
@@ -191,8 +197,8 @@ pub fn matmul_int8_avx2(
     for m_i in 0..m {
         let a_row = &act_q[m_i * k..(m_i + 1) * k];
         for n_i in 0..n {
-            let w_row  = weights.row(n_i);
-            let acc    = dot_i8_avx2(a_row, w_row);
+            let w_row = weights.row(n_i);
+            let acc = dot_i8_avx2(a_row, w_row);
             out[m_i * n + n_i] = acc as f32 * act_scale * weights.scales[n_i];
         }
     }
@@ -227,8 +233,10 @@ mod tests {
     fn dot_matches_scalar_32_elements() {
         // Exactly one AVX2 chunk (32 elements).
         let a: Vec<i8> = (0..32).map(|i| (i as i8).wrapping_sub(16)).collect();
-        let b: Vec<i8> = (0..32).map(|i| (i as i8).wrapping_mul(2).wrapping_sub(30)).collect();
-        let simd   = dot_i8_avx2(&a, &b);
+        let b: Vec<i8> = (0..32)
+            .map(|i| (i as i8).wrapping_mul(2).wrapping_sub(30))
+            .collect();
+        let simd = dot_i8_avx2(&a, &b);
         let scalar = dot_i8_scalar(&a, &b);
         assert_eq!(simd, scalar, "SIMD={simd} scalar={scalar}");
     }
@@ -279,8 +287,12 @@ mod tests {
     #[test]
     fn dot_matches_scalar_k_128() {
         let k = 128_usize;
-        let a: Vec<i8> = (0..k).map(|i| ((i * 7 + 3) as i8).wrapping_sub(64)).collect();
-        let b: Vec<i8> = (0..k).map(|i| ((i * 11 + 1) as i8).wrapping_sub(64)).collect();
+        let a: Vec<i8> = (0..k)
+            .map(|i| ((i * 7 + 3) as i8).wrapping_sub(64))
+            .collect();
+        let b: Vec<i8> = (0..k)
+            .map(|i| ((i * 11 + 1) as i8).wrapping_sub(64))
+            .collect();
         assert_eq!(dot_i8_avx2(&a, &b), dot_i8_scalar(&a, &b));
     }
 
@@ -289,10 +301,13 @@ mod tests {
     const REL_TOL: f32 = 0.02;
 
     fn max_rel_err(got: &[f32], expected: &[f32]) -> f32 {
-        got.iter().zip(expected).map(|(g, e)| {
-            let denom = g.abs().max(e.abs()).max(1e-3);
-            (g - e).abs() / denom
-        }).fold(0.0_f32, f32::max)
+        got.iter()
+            .zip(expected)
+            .map(|(g, e)| {
+                let denom = g.abs().max(e.abs()).max(1e-3);
+                (g - e).abs() / denom
+            })
+            .fold(0.0_f32, f32::max)
     }
 
     #[test]
@@ -313,7 +328,7 @@ mod tests {
         let qw = quantize_per_channel(&w, 4, 32);
         let (act_q, act_scale) = quantize_symmetric(&inp);
 
-        let avx2_out   = matmul_int8_avx2(&act_q, act_scale, &qw, 2).unwrap();
+        let avx2_out = matmul_int8_avx2(&act_q, act_scale, &qw, 2).unwrap();
         let scalar_out = matmul_int8(&act_q, act_scale, &qw, 2).unwrap();
 
         let mre = max_rel_err(avx2_out.as_slice(), scalar_out.as_slice());
@@ -331,7 +346,7 @@ mod tests {
         let qw = quantize_per_channel(&w, n_out, k);
         let (act_q, act_scale) = quantize_symmetric(&inp);
 
-        let avx2_out   = matmul_int8_avx2(&act_q, act_scale, &qw, m_rows).unwrap();
+        let avx2_out = matmul_int8_avx2(&act_q, act_scale, &qw, m_rows).unwrap();
         let scalar_out = matmul_int8(&act_q, act_scale, &qw, m_rows).unwrap();
         let mre = max_rel_err(avx2_out.as_slice(), scalar_out.as_slice());
         assert!(mre < 1e-6, "mre={mre:.2e}");

@@ -107,7 +107,14 @@ fn format_1d<T: std::fmt::Display>(
         // Show first edge_items
         for i in 0..opts.edge_items {
             if let Some(val) = tensor.get(&[i]) {
-                write!(output, "{:>width$.prec$}", val, width = opts.min_width, prec = opts.precision).unwrap();
+                write!(
+                    output,
+                    "{:>width$.prec$}",
+                    val,
+                    width = opts.min_width,
+                    prec = opts.precision
+                )
+                .unwrap();
             }
             if i < opts.edge_items - 1 {
                 write!(output, ", ").unwrap();
@@ -117,7 +124,14 @@ fn format_1d<T: std::fmt::Display>(
         // Show last edge_items
         for i in (len - opts.edge_items)..len {
             if let Some(val) = tensor.get(&[i]) {
-                write!(output, "{:>width$.prec$}", val, width = opts.min_width, prec = opts.precision).unwrap();
+                write!(
+                    output,
+                    "{:>width$.prec$}",
+                    val,
+                    width = opts.min_width,
+                    prec = opts.precision
+                )
+                .unwrap();
             }
             if i < len - 1 {
                 write!(output, ", ").unwrap();
@@ -126,7 +140,14 @@ fn format_1d<T: std::fmt::Display>(
     } else {
         for i in 0..len {
             if let Some(val) = tensor.get(&[i]) {
-                write!(output, "{:>width$.prec$}", val, width = opts.min_width, prec = opts.precision).unwrap();
+                write!(
+                    output,
+                    "{:>width$.prec$}",
+                    val,
+                    width = opts.min_width,
+                    prec = opts.precision
+                )
+                .unwrap();
             }
             if i < len - 1 {
                 write!(output, ", ").unwrap();
@@ -181,7 +202,14 @@ fn format_2d<T: std::fmt::Display>(
             }
 
             if let Some(val) = tensor.get(&[row, col]) {
-                write!(output, "{:>width$.prec$}", val, width = opts.min_width, prec = opts.precision).unwrap();
+                write!(
+                    output,
+                    "{:>width$.prec$}",
+                    val,
+                    width = opts.min_width,
+                    prec = opts.precision
+                )
+                .unwrap();
             }
 
             if cidx < col_indices.len() - 1 && col_indices[cidx + 1] != usize::MAX {
@@ -216,7 +244,14 @@ fn format_nd<T: std::fmt::Display>(
     let show_count = opts.edge_items.min(tensor.numel());
     for i in 0..show_count {
         if let Some(val) = tensor.as_slice().get(i) {
-            write!(output, "{:>width$.prec$}", val, width = opts.min_width, prec = opts.precision).unwrap();
+            write!(
+                output,
+                "{:>width$.prec$}",
+                val,
+                width = opts.min_width,
+                prec = opts.precision
+            )
+            .unwrap();
             if i < show_count - 1 {
                 write!(output, ", ").unwrap();
             }
@@ -349,7 +384,10 @@ mod tests {
         let data: Vec<f32> = (0..1500).map(|i| i as f32).collect();
         let tensor = Tensor::from_vec(data, vec![1500]).unwrap();
         let output = tensor.pretty();
-        assert!(output.contains("..."), "Output should contain '...': {output}");
+        assert!(
+            output.contains("..."),
+            "Output should contain '...': {output}"
+        );
     }
 
     #[test]

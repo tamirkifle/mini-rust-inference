@@ -641,8 +641,14 @@ mod tests {
 
     #[test]
     fn test_extract_layer_number() {
-        assert_eq!(extract_layer_number("model.layers.0.attention.wq.weight"), Some(0));
-        assert_eq!(extract_layer_number("model.layers.15.mlp.gate.weight"), Some(15));
+        assert_eq!(
+            extract_layer_number("model.layers.0.attention.wq.weight"),
+            Some(0)
+        );
+        assert_eq!(
+            extract_layer_number("model.layers.15.mlp.gate.weight"),
+            Some(15)
+        );
         assert_eq!(extract_layer_number("blk.7.attn_k.weight"), Some(7));
         assert_eq!(extract_layer_number("token_embd.weight"), None);
         assert_eq!(extract_layer_number("output.weight"), None);

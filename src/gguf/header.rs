@@ -60,7 +60,9 @@ impl GgufHeader {
         let mut magic = [0u8; 4];
         reader.read_exact(&mut magic).map_err(|e| {
             if e.kind() == std::io::ErrorKind::UnexpectedEof {
-                GgufError::UnexpectedEof { context: "magic bytes" }
+                GgufError::UnexpectedEof {
+                    context: "magic bytes",
+                }
             } else {
                 GgufError::from(e)
             }
@@ -321,10 +323,10 @@ mod tests {
     fn test_valid_header_v3() {
         // Construct a valid GGUF v3 header
         let mut data = Vec::new();
-        data.extend_from_slice(&GGUF_MAGIC);           // Magic
-        data.extend_from_slice(&3u32.to_le_bytes());   // Version 3
-        data.extend_from_slice(&10u64.to_le_bytes());  // 10 tensors
-        data.extend_from_slice(&5u64.to_le_bytes());   // 5 metadata entries
+        data.extend_from_slice(&GGUF_MAGIC); // Magic
+        data.extend_from_slice(&3u32.to_le_bytes()); // Version 3
+        data.extend_from_slice(&10u64.to_le_bytes()); // 10 tensors
+        data.extend_from_slice(&5u64.to_le_bytes()); // 5 metadata entries
 
         let mut cursor = Cursor::new(data);
         let header = GgufHeader::read(&mut cursor).unwrap();
@@ -338,7 +340,7 @@ mod tests {
     fn test_valid_header_v2() {
         let mut data = Vec::new();
         data.extend_from_slice(&GGUF_MAGIC);
-        data.extend_from_slice(&2u32.to_le_bytes());   // Version 2
+        data.extend_from_slice(&2u32.to_le_bytes()); // Version 2
         data.extend_from_slice(&100u64.to_le_bytes());
         data.extend_from_slice(&20u64.to_le_bytes());
 
@@ -353,7 +355,7 @@ mod tests {
     #[test]
     fn test_invalid_magic() {
         let mut data = Vec::new();
-        data.extend_from_slice(b"GGML");  // Wrong magic
+        data.extend_from_slice(b"GGML"); // Wrong magic
         data.extend_from_slice(&3u32.to_le_bytes());
         data.extend_from_slice(&0u64.to_le_bytes());
         data.extend_from_slice(&0u64.to_le_bytes());
@@ -368,7 +370,7 @@ mod tests {
     fn test_unsupported_version() {
         let mut data = Vec::new();
         data.extend_from_slice(&GGUF_MAGIC);
-        data.extend_from_slice(&1u32.to_le_bytes());  // Version 1 (unsupported)
+        data.extend_from_slice(&1u32.to_le_bytes()); // Version 1 (unsupported)
         data.extend_from_slice(&0u64.to_le_bytes());
         data.extend_from_slice(&0u64.to_le_bytes());
 
@@ -410,7 +412,10 @@ mod tests {
         // Test u64
         let data = 0x1234_5678_9ABC_DEF0u64.to_le_bytes();
         let mut cursor = Cursor::new(data);
-        assert_eq!(read_u64(&mut cursor, "test").unwrap(), 0x1234_5678_9ABC_DEF0);
+        assert_eq!(
+            read_u64(&mut cursor, "test").unwrap(),
+            0x1234_5678_9ABC_DEF0
+        );
 
         // Test i32
         let data = (-12345i32).to_le_bytes();
@@ -418,10 +423,10 @@ mod tests {
         assert_eq!(read_i32(&mut cursor, "test").unwrap(), -12345);
 
         // Test f32
-        let data = 3.14159f32.to_le_bytes();
+        let data = std::f32::consts::PI.to_le_bytes();
         let mut cursor = Cursor::new(data);
         let val = read_f32(&mut cursor, "test").unwrap();
-        assert!((val - 3.14159).abs() < 1e-5);
+        assert!((val - std::f32::consts::PI).abs() < 1e-5);
     }
 
     #[test]
@@ -452,7 +457,7 @@ mod tests {
     fn test_read_string_invalid_utf8() {
         let mut data = Vec::new();
         data.extend_from_slice(&3u64.to_le_bytes());
-        data.extend_from_slice(&[0xFF, 0xFE, 0xFD]);  // Invalid UTF-8
+        data.extend_from_slice(&[0xFF, 0xFE, 0xFD]); // Invalid UTF-8
 
         let mut cursor = Cursor::new(data);
         let result = read_string(&mut cursor, "test");

@@ -79,8 +79,12 @@ mod avx2_impl {
     /// Caller must guarantee AVX2 and FMA are available.
     #[target_feature(enable = "avx2,fma")]
     pub(super) unsafe fn gemm_kernel(
-        a: &[f32], b: &[f32], c: &mut [f32],
-        m: usize, k: usize, n: usize,
+        a: &[f32],
+        b: &[f32],
+        c: &mut [f32],
+        m: usize,
+        k: usize,
+        n: usize,
     ) {
         // Allocate a temporary accumulator row on the stack for small N,
         // or re-use c directly.  We write directly into `c` row-by-row.
@@ -168,12 +172,7 @@ pub fn matmul_avx2(a: &Tensor<f32>, b: &Tensor<f32>) -> Result<Tensor<f32>> {
             let mut c_data = vec![0.0_f32; m * n];
             // SAFETY: we just confirmed AVX2 + FMA are available.
             unsafe {
-                avx2_impl::gemm_kernel(
-                    a_c.as_slice(),
-                    b_c.as_slice(),
-                    &mut c_data,
-                    m, k, n,
-                );
+                avx2_impl::gemm_kernel(a_c.as_slice(), b_c.as_slice(), &mut c_data, m, k, n);
             }
             return Tensor::from_vec(c_data, vec![m, n]);
         }
@@ -199,7 +198,10 @@ mod tests {
         for (idx, (g, e)) in got.as_slice().iter().zip(expected.as_slice()).enumerate() {
             let denom = g.abs().max(e.abs()).max(1.0);
             let rel = (g - e).abs() / denom;
-            assert!(rel < REL_TOL, "element {idx}: avx2={g} naive={e} rel={rel:.2e}");
+            assert!(
+                rel < REL_TOL,
+                "element {idx}: avx2={g} naive={e} rel={rel:.2e}"
+            );
         }
     }
 
@@ -227,8 +229,13 @@ mod tests {
     #[test]
     fn test_matches_naive_square_32() {
         let n = 32_usize;
-        let a = Tensor::from_vec((0..(n * n)).map(|i| i as f32 * 0.01).collect(), vec![n, n]).unwrap();
-        let b = Tensor::from_vec((0..(n * n)).map(|i| (n * n - i) as f32 * 0.005).collect(), vec![n, n]).unwrap();
+        let a =
+            Tensor::from_vec((0..(n * n)).map(|i| i as f32 * 0.01).collect(), vec![n, n]).unwrap();
+        let b = Tensor::from_vec(
+            (0..(n * n)).map(|i| (n * n - i) as f32 * 0.005).collect(),
+            vec![n, n],
+        )
+        .unwrap();
         assert_matches_naive(&a, &b);
     }
 
@@ -236,8 +243,13 @@ mod tests {
     fn test_matches_naive_square_64() {
         // 64×64 — two full 8-wide AVX2 rows, multiple accumulation loops
         let n = 64_usize;
-        let a = Tensor::from_vec((0..(n * n)).map(|i| i as f32 * 0.001).collect(), vec![n, n]).unwrap();
-        let b = Tensor::from_vec((0..(n * n)).map(|i| (i % 17) as f32 * 0.1).collect(), vec![n, n]).unwrap();
+        let a =
+            Tensor::from_vec((0..(n * n)).map(|i| i as f32 * 0.001).collect(), vec![n, n]).unwrap();
+        let b = Tensor::from_vec(
+            (0..(n * n)).map(|i| (i % 17) as f32 * 0.1).collect(),
+            vec![n, n],
+        )
+        .unwrap();
         assert_matches_naive(&a, &b);
     }
 
@@ -245,8 +257,10 @@ mod tests {
     fn test_matches_naive_non_multiple_of_8() {
         // N=13: 1 full 8-wide chunk + 5-element scalar tail
         let (m, k, n) = (4, 16, 13);
-        let a = Tensor::from_vec((0..(m * k)).map(|i| i as f32 * 0.1).collect(), vec![m, k]).unwrap();
-        let b = Tensor::from_vec((0..(k * n)).map(|i| i as f32 * 0.05).collect(), vec![k, n]).unwrap();
+        let a =
+            Tensor::from_vec((0..(m * k)).map(|i| i as f32 * 0.1).collect(), vec![m, k]).unwrap();
+        let b =
+            Tensor::from_vec((0..(k * n)).map(|i| i as f32 * 0.05).collect(), vec![k, n]).unwrap();
         assert_matches_naive(&a, &b);
     }
 
@@ -254,8 +268,10 @@ mod tests {
     fn test_matches_naive_rectangular_tall() {
         // Tall A: typical projection matrix shape in Llama (seq=1, emb=dim)
         let (m, k, n) = (128, 64, 32);
-        let a = Tensor::from_vec((0..(m * k)).map(|i| i as f32 * 0.001).collect(), vec![m, k]).unwrap();
-        let b = Tensor::from_vec((0..(k * n)).map(|i| i as f32 * 0.002).collect(), vec![k, n]).unwrap();
+        let a =
+            Tensor::from_vec((0..(m * k)).map(|i| i as f32 * 0.001).collect(), vec![m, k]).unwrap();
+        let b =
+            Tensor::from_vec((0..(k * n)).map(|i| i as f32 * 0.002).collect(), vec![k, n]).unwrap();
         assert_matches_naive(&a, &b);
     }
 
@@ -263,8 +279,16 @@ mod tests {
     fn test_matches_naive_larger() {
         // 200×150 @ 150×100 — exercises multi-chunk accumulation
         let (m, k, n) = (200, 150, 100);
-        let a = Tensor::from_vec((0..(m * k)).map(|i| (i % 31) as f32 * 0.01).collect(), vec![m, k]).unwrap();
-        let b = Tensor::from_vec((0..(k * n)).map(|i| (i % 37) as f32 * 0.01).collect(), vec![k, n]).unwrap();
+        let a = Tensor::from_vec(
+            (0..(m * k)).map(|i| (i % 31) as f32 * 0.01).collect(),
+            vec![m, k],
+        )
+        .unwrap();
+        let b = Tensor::from_vec(
+            (0..(k * n)).map(|i| (i % 37) as f32 * 0.01).collect(),
+            vec![k, n],
+        )
+        .unwrap();
         assert_matches_naive(&a, &b);
     }
 
@@ -286,13 +310,19 @@ mod tests {
     fn test_shape_mismatch_error() {
         let a = Tensor::from_vec(vec![1.0_f32; 6], vec![2, 3]).unwrap();
         let b = Tensor::from_vec(vec![1.0_f32; 8], vec![4, 2]).unwrap();
-        assert!(matches!(matmul_avx2(&a, &b), Err(TensorError::ShapeMismatch { .. })));
+        assert!(matches!(
+            matmul_avx2(&a, &b),
+            Err(TensorError::ShapeMismatch { .. })
+        ));
     }
 
     #[test]
     fn test_non_2d_error() {
         let a = Tensor::from_vec(vec![1.0_f32; 8], vec![2, 2, 2]).unwrap();
         let b = Tensor::from_vec(vec![1.0_f32; 4], vec![2, 2]).unwrap();
-        assert!(matches!(matmul_avx2(&a, &b), Err(TensorError::InvalidShape { .. })));
+        assert!(matches!(
+            matmul_avx2(&a, &b),
+            Err(TensorError::InvalidShape { .. })
+        ));
     }
 }

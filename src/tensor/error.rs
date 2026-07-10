@@ -20,7 +20,10 @@ pub enum TensorError {
         shape: Vec<usize>,
     },
     /// Element count mismatch between shape and data.
-    ElementCountMismatch { shape_elements: usize, data_len: usize },
+    ElementCountMismatch {
+        shape_elements: usize,
+        data_len: usize,
+    },
     /// Cannot reshape to target shape.
     ReshapeError { from: Vec<usize>, to: Vec<usize> },
 }

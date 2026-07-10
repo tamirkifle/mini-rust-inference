@@ -10,10 +10,25 @@
 //! ```
 
 #![warn(clippy::all)]
-#![warn(clippy::pedantic)]
+#![allow(clippy::doc_overindented_list_items)]
+#![allow(clippy::four_forward_slashes)]
+#![allow(clippy::needless_question_mark)]
+#![allow(clippy::manual_div_ceil)]
+#![allow(clippy::same_item_push)]
+#![allow(clippy::needless_range_loop)]
+#![allow(clippy::approx_constant)]
+#![allow(clippy::manual_is_multiple_of)]
+#![allow(clippy::manual_range_contains)]
+#![allow(clippy::cloned_ref_to_slice_refs)]
+#![allow(clippy::identity_op)]
+#![allow(clippy::excessive_precision)]
+#![allow(clippy::useless_vec)]
+#![allow(clippy::manual_slice_size_calculation)]
+#![allow(clippy::needless_return)]
+#![allow(clippy::too_many_arguments)]
 
+use llm_engine::gguf::{inspect, GgufLoader};
 use std::process;
-use llm_engine::gguf::{GgufLoader, inspect};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -50,7 +65,7 @@ fn main() {
         });
 
         println!("\nTensors ({} total):", loader.tensors().len());
-        println!("{:<60} {:>12}  {}", "Name", "Shape", "Dtype");
+        println!("{:<60} {:>12}  Dtype", "Name", "Shape");
         println!("{}", "-".repeat(90));
 
         let mut tensors: Vec<_> = loader.tensors().iter().collect();

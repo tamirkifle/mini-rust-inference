@@ -28,9 +28,9 @@
 //! For single-token decode (`M = 1`) there is nothing to parallelise; fall
 //! back to `matmul_blocked` to avoid rayon thread-pool overhead.
 
-use std::borrow::Cow;
-use rayon::prelude::*;
 use crate::tensor::{Result, Tensor, TensorError};
+use rayon::prelude::*;
+use std::borrow::Cow;
 
 /// Row-parallel GEMM: `C = A @ B` where each output row is computed by an
 /// independent rayon task.
@@ -46,7 +46,8 @@ pub fn matmul_parallel(a: &Tensor<f32>, b: &Tensor<f32>) -> Result<Tensor<f32>> 
         return Err(TensorError::InvalidShape {
             reason: format!(
                 "matmul_parallel: `a` must be 2-D, got {}D (shape {:?})",
-                a.ndim(), a.dims()
+                a.ndim(),
+                a.dims()
             ),
         });
     }
@@ -54,24 +55,33 @@ pub fn matmul_parallel(a: &Tensor<f32>, b: &Tensor<f32>) -> Result<Tensor<f32>> 
         return Err(TensorError::InvalidShape {
             reason: format!(
                 "matmul_parallel: `b` must be 2-D, got {}D (shape {:?})",
-                b.ndim(), b.dims()
+                b.ndim(),
+                b.dims()
             ),
         });
     }
 
-    let [m, k]  = [a.dims()[0], a.dims()[1]];
+    let [m, k] = [a.dims()[0], a.dims()[1]];
     let [k2, n] = [b.dims()[0], b.dims()[1]];
 
     if k != k2 {
         return Err(TensorError::ShapeMismatch {
             expected: vec![m, k],
-            got:      vec![k2, n],
+            got: vec![k2, n],
         });
     }
 
     // ── contiguity gate ────────────────────────────────────────────────────
-    let a_c: Cow<Tensor<f32>> = if a.is_contiguous() { Cow::Borrowed(a) } else { Cow::Owned(a.contiguous()) };
-    let b_c: Cow<Tensor<f32>> = if b.is_contiguous() { Cow::Borrowed(b) } else { Cow::Owned(b.contiguous()) };
+    let a_c: Cow<Tensor<f32>> = if a.is_contiguous() {
+        Cow::Borrowed(a)
+    } else {
+        Cow::Owned(a.contiguous())
+    };
+    let b_c: Cow<Tensor<f32>> = if b.is_contiguous() {
+        Cow::Borrowed(b)
+    } else {
+        Cow::Owned(b.contiguous())
+    };
 
     let a_slice: &[f32] = a_c.as_slice();
     let b_slice: &[f32] = b_c.as_slice();
@@ -81,31 +91,28 @@ pub fn matmul_parallel(a: &Tensor<f32>, b: &Tensor<f32>) -> Result<Tensor<f32>> 
     // Each rayon task receives exactly one row and has exclusive write access.
     let mut c_data = vec![0.0_f32; m * n];
 
-    c_data
-        .par_chunks_mut(n)
-        .enumerate()
-        .for_each(|(i, c_row)| {
-            let a_row = &a_slice[i * k..(i + 1) * k];
+    c_data.par_chunks_mut(n).enumerate().for_each(|(i, c_row)| {
+        let a_row = &a_slice[i * k..(i + 1) * k];
 
-            // On aarch64 use explicit NEON vfmaq_f32 (4 f32/cycle) per row.
-            // This combines SIMD throughput within each row with rayon
-            // parallelism across rows — the two independently do their work.
-            #[cfg(target_arch = "aarch64")]
-            {
-                super::neon_f32::neon_gemm_row_slice(a_row, b_slice, c_row, k, n);
-                return;
-            }
+        // On aarch64 use explicit NEON vfmaq_f32 (4 f32/cycle) per row.
+        // This combines SIMD throughput within each row with rayon
+        // parallelism across rows — the two independently do their work.
+        #[cfg(target_arch = "aarch64")]
+        {
+            super::neon_f32::neon_gemm_row_slice(a_row, b_slice, c_row, k, n);
+            return;
+        }
 
-            // On x86_64 LLVM auto-vectorizes this scalar loop well (fixed
-            // stride-1 `for j in 0..n`), so no explicit AVX2 call needed here.
-            #[cfg(not(target_arch = "aarch64"))]
-            for p in 0..k {
-                let a_ip = a_row[p];
-                for j in 0..n {
-                    c_row[j] += a_ip * b_slice[p * n + j];
-                }
+        // On x86_64 LLVM auto-vectorizes this scalar loop well (fixed
+        // stride-1 `for j in 0..n`), so no explicit AVX2 call needed here.
+        #[cfg(not(target_arch = "aarch64"))]
+        for p in 0..k {
+            let a_ip = a_row[p];
+            for j in 0..n {
+                c_row[j] += a_ip * b_slice[p * n + j];
             }
-        });
+        }
+    });
 
     Tensor::from_vec(c_data, vec![m, n])
 }
@@ -123,12 +130,15 @@ mod tests {
 
     fn assert_matches_blocked(a: &Tensor<f32>, b: &Tensor<f32>) {
         let expected = matmul_blocked(a, b).unwrap();
-        let got      = matmul_parallel(a, b).unwrap();
+        let got = matmul_parallel(a, b).unwrap();
         assert_eq!(got.dims(), expected.dims());
         for (i, (g, e)) in got.as_slice().iter().zip(expected.as_slice()).enumerate() {
-            let denom   = g.abs().max(e.abs()).max(1.0);
+            let denom = g.abs().max(e.abs()).max(1.0);
             let rel_err = (g - e).abs() / denom;
-            assert!(rel_err < 1e-4, "element {i}: par={g} blocked={e} rel_err={rel_err:.2e}");
+            assert!(
+                rel_err < 1e-4,
+                "element {i}: par={g} blocked={e} rel_err={rel_err:.2e}"
+            );
         }
     }
 
@@ -150,42 +160,57 @@ mod tests {
 
     #[test]
     fn test_parallel_identity() {
-        let a  = Tensor::from_vec(vec![1.0_f32, 2.0, 3.0, 4.0], vec![2, 2]).unwrap();
+        let a = Tensor::from_vec(vec![1.0_f32, 2.0, 3.0, 4.0], vec![2, 2]).unwrap();
         let id = Tensor::from_vec(vec![1.0_f32, 0.0, 0.0, 1.0], vec![2, 2]).unwrap();
-        let c  = matmul_parallel(&a, &id).unwrap();
+        let c = matmul_parallel(&a, &id).unwrap();
         assert!(close_slice(c.as_slice(), &[1.0, 2.0, 3.0, 4.0], 1e-5));
     }
 
     #[test]
     fn test_parallel_matches_blocked_square_32() {
         let n = 32_usize;
-        let a = Tensor::from_vec((0..n*n).map(|i| i as f32 * 0.01).collect(), vec![n, n]).unwrap();
-        let b = Tensor::from_vec((0..n*n).map(|i| (n*n - i) as f32 * 0.005).collect(), vec![n, n]).unwrap();
+        let a =
+            Tensor::from_vec((0..n * n).map(|i| i as f32 * 0.01).collect(), vec![n, n]).unwrap();
+        let b = Tensor::from_vec(
+            (0..n * n).map(|i| (n * n - i) as f32 * 0.005).collect(),
+            vec![n, n],
+        )
+        .unwrap();
         assert_matches_blocked(&a, &b);
     }
 
     #[test]
     fn test_parallel_matches_blocked_rectangular() {
         let (m, k, n) = (50, 70, 40);
-        let a = Tensor::from_vec((0..m*k).map(|i| i as f32 * 0.003).collect(), vec![m, k]).unwrap();
-        let b = Tensor::from_vec((0..k*n).map(|i| (k*n - i) as f32 * 0.002).collect(), vec![k, n]).unwrap();
+        let a =
+            Tensor::from_vec((0..m * k).map(|i| i as f32 * 0.003).collect(), vec![m, k]).unwrap();
+        let b = Tensor::from_vec(
+            (0..k * n).map(|i| (k * n - i) as f32 * 0.002).collect(),
+            vec![k, n],
+        )
+        .unwrap();
         assert_matches_blocked(&a, &b);
     }
 
     #[test]
     fn test_parallel_matches_blocked_100x80x60() {
         let (m, k, n) = (100, 80, 60);
-        let a = Tensor::from_vec((0..m*k).map(|i| i as f32 * 0.001).collect(), vec![m, k]).unwrap();
-        let b = Tensor::from_vec((0..k*n).map(|i| (k*n - i) as f32 * 0.001).collect(), vec![k, n]).unwrap();
+        let a =
+            Tensor::from_vec((0..m * k).map(|i| i as f32 * 0.001).collect(), vec![m, k]).unwrap();
+        let b = Tensor::from_vec(
+            (0..k * n).map(|i| (k * n - i) as f32 * 0.001).collect(),
+            vec![k, n],
+        )
+        .unwrap();
         assert_matches_blocked(&a, &b);
     }
 
     #[test]
     fn test_parallel_non_contiguous_a() {
-        let a   = Tensor::from_vec(vec![1.0_f32, 3.0, 2.0, 4.0], vec![2, 2]).unwrap();
+        let a = Tensor::from_vec(vec![1.0_f32, 3.0, 2.0, 4.0], vec![2, 2]).unwrap();
         let a_t = a.transpose(0, 1).unwrap();
-        let id  = Tensor::from_vec(vec![1.0_f32, 0.0, 0.0, 1.0], vec![2, 2]).unwrap();
-        let c   = matmul_parallel(&a_t, &id).unwrap();
+        let id = Tensor::from_vec(vec![1.0_f32, 0.0, 0.0, 1.0], vec![2, 2]).unwrap();
+        let c = matmul_parallel(&a_t, &id).unwrap();
         assert!(close_slice(c.as_slice(), &[1.0, 2.0, 3.0, 4.0], 1e-5));
     }
 
@@ -193,14 +218,20 @@ mod tests {
     fn test_parallel_shape_mismatch_rejected() {
         let a = Tensor::from_vec(vec![1.0_f32; 4], vec![2, 2]).unwrap();
         let b = Tensor::from_vec(vec![1.0_f32; 3], vec![3, 1]).unwrap();
-        assert!(matches!(matmul_parallel(&a, &b), Err(TensorError::ShapeMismatch { .. })));
+        assert!(matches!(
+            matmul_parallel(&a, &b),
+            Err(TensorError::ShapeMismatch { .. })
+        ));
     }
 
     #[test]
     fn test_parallel_non_2d_a_rejected() {
         let a = Tensor::from_vec(vec![1.0_f32; 8], vec![2, 2, 2]).unwrap();
         let b = Tensor::from_vec(vec![1.0_f32; 4], vec![2, 2]).unwrap();
-        assert!(matches!(matmul_parallel(&a, &b), Err(TensorError::InvalidShape { .. })));
+        assert!(matches!(
+            matmul_parallel(&a, &b),
+            Err(TensorError::InvalidShape { .. })
+        ));
     }
 
     /// Output rows must be independent: parallel produces same result as sequential.
@@ -209,8 +240,8 @@ mod tests {
         // Each output row of a 4×4 @ 4×4 must be independent.
         let a = Tensor::from_vec((0..16).map(|i| i as f32).collect(), vec![4, 4]).unwrap();
         let b = Tensor::from_vec((0..16).map(|i| (16 - i) as f32).collect(), vec![4, 4]).unwrap();
-        let par  = matmul_parallel(&a, &b).unwrap();
-        let seq  = matmul_blocked(&a, &b).unwrap();
+        let par = matmul_parallel(&a, &b).unwrap();
+        let seq = matmul_blocked(&a, &b).unwrap();
         assert!(close_slice(par.as_slice(), seq.as_slice(), 1e-4));
     }
 }
@@ -227,11 +258,20 @@ use crate::quant::int8::per_channel::QuantizedMatrix;
 #[inline(always)]
 fn dot_i8_simd(a: &[i8], b: &[i8]) -> i32 {
     #[cfg(target_arch = "aarch64")]
-    { return super::int8_neon::dot_i8_neon(a, b); }
+    {
+        return super::int8_neon::dot_i8_neon(a, b);
+    }
     #[cfg(target_arch = "x86_64")]
-    { return super::int8_avx2::dot_i8_avx2(a, b); }
+    {
+        return super::int8_avx2::dot_i8_avx2(a, b);
+    }
     #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
-    { a.iter().zip(b).map(|(&x, &y)| i32::from(x) * i32::from(y)).sum() }
+    {
+        a.iter()
+            .zip(b)
+            .map(|(&x, &y)| i32::from(x) * i32::from(y))
+            .sum()
+    }
 }
 
 /// Row-parallel INT8 × INT8 → INT32 → f32 GEMM.
@@ -278,7 +318,10 @@ pub fn matmul_int8_parallel(
         return Err(TensorError::InvalidShape {
             reason: format!(
                 "matmul_int8_parallel: act_q.len()={} != m*k={}*{}={}",
-                act_q.len(), m, k, m * k
+                act_q.len(),
+                m,
+                k,
+                m * k
             ),
         });
     }
@@ -294,7 +337,7 @@ pub fn matmul_int8_parallel(
             let a_row = &act_q[m_i * k..(m_i + 1) * k];
             for n_i in 0..n {
                 let w_row = weights.row(n_i);
-                let acc   = dot_i8_simd(a_row, w_row);
+                let acc = dot_i8_simd(a_row, w_row);
                 out_row[n_i] = acc as f32 * act_scale * weights.scales[n_i];
             }
         });
@@ -314,10 +357,13 @@ mod int8_parallel_tests {
     const REL_TOL: f32 = 1e-6; // parallel uses same arithmetic as scalar → bit-identical
 
     fn max_rel_err(got: &[f32], expected: &[f32]) -> f32 {
-        got.iter().zip(expected).map(|(g, e)| {
-            let denom = g.abs().max(e.abs()).max(1e-3);
-            (g - e).abs() / denom
-        }).fold(0.0_f32, f32::max)
+        got.iter()
+            .zip(expected)
+            .map(|(g, e)| {
+                let denom = g.abs().max(e.abs()).max(1e-3);
+                (g - e).abs() / denom
+            })
+            .fold(0.0_f32, f32::max)
     }
 
     #[test]
@@ -339,7 +385,7 @@ mod int8_parallel_tests {
         let inp: Vec<f32> = (0..m * k).map(|i| (i as f32) * 0.05 - 1.6).collect();
         let qw = quantize_per_channel(&w, n_out, k);
         let (act_q, act_scale) = quantize_symmetric(&inp);
-        let par    = matmul_int8_parallel(&act_q, act_scale, &qw, m).unwrap();
+        let par = matmul_int8_parallel(&act_q, act_scale, &qw, m).unwrap();
         let scalar = matmul_int8(&act_q, act_scale, &qw, m).unwrap();
         let mre = max_rel_err(par.as_slice(), scalar.as_slice());
         assert!(mre < REL_TOL, "mre={mre:.2e}");
@@ -354,7 +400,7 @@ mod int8_parallel_tests {
         let inp: Vec<f32> = (0..m * k).map(|i| (i as f32) * 0.02 - 5.0).collect();
         let qw = quantize_per_channel(&w, n_out, k);
         let (act_q, act_scale) = quantize_symmetric(&inp);
-        let par    = matmul_int8_parallel(&act_q, act_scale, &qw, m).unwrap();
+        let par = matmul_int8_parallel(&act_q, act_scale, &qw, m).unwrap();
         let scalar = matmul_int8(&act_q, act_scale, &qw, m).unwrap();
         let mre = max_rel_err(par.as_slice(), scalar.as_slice());
         assert!(mre < REL_TOL, "mre={mre:.2e}");
@@ -369,7 +415,7 @@ mod int8_parallel_tests {
         let inp: Vec<f32> = (0..k).map(|i| (i as f32) * 0.06 - 2.0).collect();
         let qw = quantize_per_channel(&w, n_out, k);
         let (act_q, act_scale) = quantize_symmetric(&inp);
-        let par    = matmul_int8_parallel(&act_q, act_scale, &qw, 1).unwrap();
+        let par = matmul_int8_parallel(&act_q, act_scale, &qw, 1).unwrap();
         let scalar = matmul_int8(&act_q, act_scale, &qw, 1).unwrap();
         let mre = max_rel_err(par.as_slice(), scalar.as_slice());
         assert!(mre < REL_TOL, "mre={mre:.2e}");
@@ -400,9 +446,11 @@ mod int8_parallel_tests {
         let qw = quantize_per_channel(&w, n_out, k);
         let mut inp = vec![0.0_f32; m * k];
         // Only row 3 is non-zero.
-        for j in 0..k { inp[3 * k + j] = (j as f32) * 0.1 + 0.5; }
+        for j in 0..k {
+            inp[3 * k + j] = (j as f32) * 0.1 + 0.5;
+        }
         let (act_q, act_scale) = quantize_symmetric(&inp);
-        let par    = matmul_int8_parallel(&act_q, act_scale, &qw, m).unwrap();
+        let par = matmul_int8_parallel(&act_q, act_scale, &qw, m).unwrap();
         let scalar = matmul_int8(&act_q, act_scale, &qw, m).unwrap();
         let mre = max_rel_err(par.as_slice(), scalar.as_slice());
         assert!(mre < REL_TOL, "mre={mre:.2e}");

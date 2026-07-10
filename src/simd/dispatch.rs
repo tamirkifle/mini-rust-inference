@@ -59,46 +59,72 @@ impl CpuFeatures {
     pub fn detect() -> Self {
         Self {
             avx2: Self::detect_avx2(),
-            fma:  Self::detect_fma(),
+            fma: Self::detect_fma(),
             neon: Self::detect_neon(),
         }
     }
 
     #[cfg(target_arch = "x86_64")]
-    fn detect_avx2() -> bool { is_x86_feature_detected!("avx2") }
+    fn detect_avx2() -> bool {
+        is_x86_feature_detected!("avx2")
+    }
     #[cfg(not(target_arch = "x86_64"))]
-    fn detect_avx2() -> bool { false }
+    fn detect_avx2() -> bool {
+        false
+    }
 
     #[cfg(target_arch = "x86_64")]
-    fn detect_fma() -> bool { is_x86_feature_detected!("fma") }
+    fn detect_fma() -> bool {
+        is_x86_feature_detected!("fma")
+    }
     #[cfg(not(target_arch = "x86_64"))]
-    fn detect_fma() -> bool { false }
+    fn detect_fma() -> bool {
+        false
+    }
 
     /// NEON is mandatory on all aarch64 targets per the AArch64 ABI.
     #[cfg(target_arch = "aarch64")]
-    fn detect_neon() -> bool { true }
+    fn detect_neon() -> bool {
+        true
+    }
     #[cfg(not(target_arch = "aarch64"))]
-    fn detect_neon() -> bool { false }
+    fn detect_neon() -> bool {
+        false
+    }
 
     /// True when the full AVX2 + FMA path is available.
     #[must_use]
-    pub fn has_avx2_fma(&self) -> bool { self.avx2 && self.fma }
+    pub fn has_avx2_fma(&self) -> bool {
+        self.avx2 && self.fma
+    }
 
     /// True when NEON is available (always on aarch64).
     #[must_use]
-    pub fn has_neon(&self) -> bool { self.neon }
+    pub fn has_neon(&self) -> bool {
+        self.neon
+    }
 
     /// Human-readable summary line, e.g. `"aarch64 [NEON]"`.
     #[must_use]
     pub fn summary(&self) -> String {
         let mut parts = Vec::new();
-        if self.avx2 { parts.push("AVX2"); }
-        if self.fma  { parts.push("FMA");  }
-        if self.neon { parts.push("NEON"); }
-        if parts.is_empty() { parts.push("scalar"); }
+        if self.avx2 {
+            parts.push("AVX2");
+        }
+        if self.fma {
+            parts.push("FMA");
+        }
+        if self.neon {
+            parts.push("NEON");
+        }
+        if parts.is_empty() {
+            parts.push("scalar");
+        }
 
-        #[cfg(target_arch = "x86_64")]   let arch = "x86_64";
-        #[cfg(target_arch = "aarch64")]  let arch = "aarch64";
+        #[cfg(target_arch = "x86_64")]
+        let arch = "x86_64";
+        #[cfg(target_arch = "aarch64")]
+        let arch = "aarch64";
         #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
         let arch = "unknown";
 
@@ -114,9 +140,9 @@ impl fmt::Display for CpuFeatures {
 
 // ── type aliases for the three kernel signatures ──────────────────────────
 
-type MatmulFn   = fn(&Tensor<f32>, &Tensor<f32>) -> Result<Tensor<f32>>;
-type RmsnormFn  = fn(&Tensor<f32>, &Tensor<f32>, f32) -> Result<Tensor<f32>>;
-type SoftmaxFn  = fn(&Tensor<f32>) -> Result<Tensor<f32>>;
+type MatmulFn = fn(&Tensor<f32>, &Tensor<f32>) -> Result<Tensor<f32>>;
+type RmsnormFn = fn(&Tensor<f32>, &Tensor<f32>, f32) -> Result<Tensor<f32>>;
+type SoftmaxFn = fn(&Tensor<f32>) -> Result<Tensor<f32>>;
 type SoftmaxDimFn = fn(&Tensor<f32>, usize) -> Result<Tensor<f32>>;
 
 // ── Kernels ───────────────────────────────────────────────────────────────
@@ -125,10 +151,10 @@ type SoftmaxDimFn = fn(&Tensor<f32>, usize) -> Result<Tensor<f32>>;
 ///
 /// Obtain via [`global_kernels`] (cached) or [`Kernels::select`] (fresh).
 pub struct Kernels {
-    features:    CpuFeatures,
-    matmul_fn:   MatmulFn,
-    rmsnorm_fn:  RmsnormFn,
-    softmax_fn:  SoftmaxFn,
+    features: CpuFeatures,
+    matmul_fn: MatmulFn,
+    rmsnorm_fn: RmsnormFn,
+    softmax_fn: SoftmaxFn,
     softmax_dim_fn: SoftmaxDimFn,
 }
 
@@ -143,7 +169,7 @@ impl Kernels {
         // the function call overhead on non-x86 by pointing directly to
         // matmul_blocked on aarch64.
         let matmul_fn: MatmulFn = if f.has_avx2_fma() {
-            matmul_avx2   // x86_64 with AVX2+FMA
+            matmul_avx2 // x86_64 with AVX2+FMA
         } else {
             matmul_blocked // aarch64 / scalar / older x86
         };
@@ -169,12 +195,20 @@ impl Kernels {
             softmax_dim
         };
 
-        Self { features: f, matmul_fn, rmsnorm_fn, softmax_fn, softmax_dim_fn }
+        Self {
+            features: f,
+            matmul_fn,
+            rmsnorm_fn,
+            softmax_fn,
+            softmax_dim_fn,
+        }
     }
 
     /// The CPU features this kernel set was built for.
     #[must_use]
-    pub fn features(&self) -> &CpuFeatures { &self.features }
+    pub fn features(&self) -> &CpuFeatures {
+        &self.features
+    }
 
     /// 2-D GEMM: `C = A @ B`.  Shape `[M,K] × [K,N] → [M,N]`.
     ///
@@ -208,10 +242,25 @@ impl Kernels {
     /// `"aarch64 [NEON] | matmul=blocked rmsnorm=simd softmax=simd"`
     #[must_use]
     pub fn description(&self) -> String {
-        let mm   = if self.features.has_avx2_fma() { "avx2"    } else { "blocked" };
-        let norm = if self.features.has_avx2_fma() || self.features.has_neon() { "simd" } else { "scalar" };
-        let smx  = if self.features.has_avx2_fma() || self.features.has_neon() { "simd" } else { "scalar" };
-        format!("{} | matmul={mm} rmsnorm={norm} softmax={smx}", self.features)
+        let mm = if self.features.has_avx2_fma() {
+            "avx2"
+        } else {
+            "blocked"
+        };
+        let norm = if self.features.has_avx2_fma() || self.features.has_neon() {
+            "simd"
+        } else {
+            "scalar"
+        };
+        let smx = if self.features.has_avx2_fma() || self.features.has_neon() {
+            "simd"
+        } else {
+            "scalar"
+        };
+        format!(
+            "{} | matmul={mm} rmsnorm={norm} softmax={smx}",
+            self.features
+        )
     }
 }
 
@@ -299,10 +348,10 @@ mod tests {
 
     #[test]
     fn test_dispatch_matmul_2x2_identity() {
-        let k  = Kernels::select(CpuFeatures::detect());
-        let a  = Tensor::from_vec(vec![1.0_f32, 2.0, 3.0, 4.0], vec![2, 2]).unwrap();
+        let k = Kernels::select(CpuFeatures::detect());
+        let a = Tensor::from_vec(vec![1.0_f32, 2.0, 3.0, 4.0], vec![2, 2]).unwrap();
         let id = Tensor::from_vec(vec![1.0_f32, 0.0, 0.0, 1.0], vec![2, 2]).unwrap();
-        let c  = k.matmul(&a, &id).unwrap();
+        let c = k.matmul(&a, &id).unwrap();
         let expected = [1.0_f32, 2.0, 3.0, 4.0];
         for (g, e) in c.as_slice().iter().zip(&expected) {
             assert!((g - e).abs() < 1e-5, "got {g}, expected {e}");
@@ -315,13 +364,19 @@ mod tests {
         let k = Kernels::select(CpuFeatures::detect());
         let (m, inner, n) = (32, 48, 24);
         let a = Tensor::from_vec(
-            (0..(m * inner)).map(|i| i as f32 * 0.01).collect(), vec![m, inner],
-        ).unwrap();
+            (0..(m * inner)).map(|i| i as f32 * 0.01).collect(),
+            vec![m, inner],
+        )
+        .unwrap();
         let b = Tensor::from_vec(
-            (0..(inner * n)).map(|i| (inner * n - i) as f32 * 0.005).collect(), vec![inner, n],
-        ).unwrap();
+            (0..(inner * n))
+                .map(|i| (inner * n - i) as f32 * 0.005)
+                .collect(),
+            vec![inner, n],
+        )
+        .unwrap();
         let expected = matmul_naive(&a, &b).unwrap();
-        let got      = k.matmul(&a, &b).unwrap();
+        let got = k.matmul(&a, &b).unwrap();
         assert_eq!(got.dims(), expected.dims());
         for (g, e) in got.as_slice().iter().zip(expected.as_slice()) {
             let rel = (g - e).abs() / e.abs().max(1.0);
@@ -334,10 +389,14 @@ mod tests {
     #[test]
     fn test_dispatch_rmsnorm_no_nan() {
         let k = Kernels::select(CpuFeatures::detect());
-        let x = Tensor::from_vec((0..16).map(|i| i as f32 * 0.1 + 0.1).collect(), vec![4, 4]).unwrap();
+        let x =
+            Tensor::from_vec((0..16).map(|i| i as f32 * 0.1 + 0.1).collect(), vec![4, 4]).unwrap();
         let w = Tensor::ones(vec![4]);
         let out = k.rmsnorm(&x, &w, 1e-5).unwrap();
-        assert!(out.as_slice().iter().all(|v| !v.is_nan() && !v.is_infinite()));
+        assert!(out
+            .as_slice()
+            .iter()
+            .all(|v| !v.is_nan() && !v.is_infinite()));
         assert_eq!(out.dims(), x.dims());
     }
 
@@ -349,7 +408,7 @@ mod tests {
         let x = Tensor::from_vec(data, vec![4, 8]).unwrap();
         let w = Tensor::ones(vec![8]);
         let scalar = rmsnorm(&x, &w, 1e-5).unwrap();
-        let disp   = k.rmsnorm(&x, &w, 1e-5).unwrap();
+        let disp = k.rmsnorm(&x, &w, 1e-5).unwrap();
         for (a, b) in disp.as_slice().iter().zip(scalar.as_slice()) {
             assert!((a - b).abs() < 1e-5, "dispatch={a}, scalar={b}");
         }
@@ -372,7 +431,7 @@ mod tests {
         let k = Kernels::select(CpuFeatures::detect());
         let x = Tensor::from_vec(vec![1.0_f32, 2.0, 3.0, 4.0], vec![2, 2]).unwrap();
         let scalar = softmax_dim(&x, 0).unwrap();
-        let disp   = k.softmax_dim(&x, 0).unwrap();
+        let disp = k.softmax_dim(&x, 0).unwrap();
         for (a, b) in disp.as_slice().iter().zip(scalar.as_slice()) {
             assert!((a - b).abs() < 1e-6);
         }
@@ -384,7 +443,10 @@ mod tests {
     fn test_global_kernels_returns_same_ref() {
         let a = global_kernels() as *const Kernels;
         let b = global_kernels() as *const Kernels;
-        assert_eq!(a, b, "global_kernels must return the same address every call");
+        assert_eq!(
+            a, b,
+            "global_kernels must return the same address every call"
+        );
     }
 
     #[test]

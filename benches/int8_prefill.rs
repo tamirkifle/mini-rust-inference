@@ -36,12 +36,13 @@ use llm_engine::tensor::Tensor;
 
 // ── bench geometry ────────────────────────────────────────────────────────────
 
-const EMBED:    usize = 256;
-const HEADS:    usize = 4;
+const EMBED: usize = 256;
+const HEADS: usize = 4;
 const KV_HEADS: usize = 4;
-const HEAD_DIM: usize = EMBED / HEADS;  // 64
-const FFN:      usize = 512;
-const CTX_LEN:  usize = 1024;fn qmatrix(rows: usize, cols: usize, seed: f32) -> QuantizedMatrix {
+const HEAD_DIM: usize = EMBED / HEADS; // 64
+const FFN: usize = 512;
+const CTX_LEN: usize = 1024;
+fn qmatrix(rows: usize, cols: usize, seed: f32) -> QuantizedMatrix {
     let data: Vec<f32> = (0..rows * cols)
         .map(|i| ((i as f32 * seed * 0.01) - (rows * cols) as f32 * seed * 0.005).sin() * 0.3)
         .collect();
@@ -49,21 +50,23 @@ const CTX_LEN:  usize = 1024;fn qmatrix(rows: usize, cols: usize, seed: f32) -> 
 }
 
 fn make_block() -> TransformerBlockInt8 {
-    let qd  = HEADS    * HEAD_DIM;
+    let qd = HEADS * HEAD_DIM;
     let kvd = KV_HEADS * HEAD_DIM;
     let rope = RopeTable::new(CTX_LEN, HEAD_DIM, 10_000.0);
     TransformerBlockInt8::new(
-        qmatrix(qd,    EMBED, 1.0),  // wq
-        qmatrix(kvd,   EMBED, 1.1),  // wk
-        qmatrix(kvd,   EMBED, 1.2),  // wv
-        qmatrix(EMBED, qd,   1.3),   // wo
-        Tensor::ones(vec![EMBED]),   // attn_norm
-        qmatrix(FFN,   EMBED, 1.4),  // wgate
-        qmatrix(FFN,   EMBED, 1.5),  // wup
-        qmatrix(EMBED, FFN,  1.6),   // wdown
-        Tensor::ones(vec![EMBED]),   // ffn_norm
+        qmatrix(qd, EMBED, 1.0),   // wq
+        qmatrix(kvd, EMBED, 1.1),  // wk
+        qmatrix(kvd, EMBED, 1.2),  // wv
+        qmatrix(EMBED, qd, 1.3),   // wo
+        Tensor::ones(vec![EMBED]), // attn_norm
+        qmatrix(FFN, EMBED, 1.4),  // wgate
+        qmatrix(FFN, EMBED, 1.5),  // wup
+        qmatrix(EMBED, FFN, 1.6),  // wdown
+        Tensor::ones(vec![EMBED]), // ffn_norm
         rope,
-        HEADS, KV_HEADS, 1e-5,
+        HEADS,
+        KV_HEADS,
+        1e-5,
     )
 }
 

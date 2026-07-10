@@ -25,10 +25,7 @@ use crate::tensor::{Result, Tensor, TensorError};
 pub fn rmsnorm_simd(x: &Tensor<f32>, weight: &Tensor<f32>, eps: f32) -> Result<Tensor<f32>> {
     if weight.ndim() != 1 {
         return Err(TensorError::InvalidShape {
-            reason: format!(
-                "rmsnorm_simd: weight must be 1-D, got {}D",
-                weight.ndim()
-            ),
+            reason: format!("rmsnorm_simd: weight must be 1-D, got {}D", weight.ndim()),
         });
     }
     let d = weight.dims()[0];
@@ -91,7 +88,10 @@ pub fn rmsnorm_simd(x: &Tensor<f32>, weight: &Tensor<f32>, eps: f32) -> Result<T
 pub fn rmsnorm_simd_inplace(x: &mut Tensor<f32>, weight: &Tensor<f32>, eps: f32) -> Result<()> {
     if weight.ndim() != 1 {
         return Err(TensorError::InvalidShape {
-            reason: format!("rmsnorm_simd_inplace: weight must be 1-D, got {}D", weight.ndim()),
+            reason: format!(
+                "rmsnorm_simd_inplace: weight must be 1-D, got {}D",
+                weight.ndim()
+            ),
         });
     }
     let d = weight.dims()[0];
@@ -165,9 +165,13 @@ mod tests {
         let x = Tensor::from_vec(vec![1.0_f32, 2.0, 3.0, 4.0], vec![4]).unwrap();
         let w = Tensor::ones(vec![4]);
         let scalar = rmsnorm(&x, &w, EPS).unwrap();
-        let simd   = rmsnorm_simd(&x, &w, EPS).unwrap();
-        assert!(close_slice(scalar.as_slice(), simd.as_slice(), 1e-5),
-            "scalar={:?}\nsimd={:?}", scalar.as_slice(), simd.as_slice());
+        let simd = rmsnorm_simd(&x, &w, EPS).unwrap();
+        assert!(
+            close_slice(scalar.as_slice(), simd.as_slice(), 1e-5),
+            "scalar={:?}\nsimd={:?}",
+            scalar.as_slice(),
+            simd.as_slice()
+        );
     }
 
     #[test]
@@ -176,7 +180,7 @@ mod tests {
         let x = Tensor::from_vec(data, vec![4, 8]).unwrap();
         let w = Tensor::from_vec((1..=8).map(|i| i as f32 * 0.5).collect(), vec![8]).unwrap();
         let scalar = rmsnorm(&x, &w, EPS).unwrap();
-        let simd   = rmsnorm_simd(&x, &w, EPS).unwrap();
+        let simd = rmsnorm_simd(&x, &w, EPS).unwrap();
         assert!(close_slice(scalar.as_slice(), simd.as_slice(), 1e-5));
     }
 
@@ -184,22 +188,25 @@ mod tests {
     fn test_simd_matches_scalar_3d() {
         let (batch, seq, d) = (2, 3, 16);
         let x = Tensor::from_vec(
-            (0..(batch * seq * d)).map(|i| i as f32 * 0.05 + 0.01).collect(),
+            (0..(batch * seq * d))
+                .map(|i| i as f32 * 0.05 + 0.01)
+                .collect(),
             vec![batch, seq, d],
-        ).unwrap();
+        )
+        .unwrap();
         let w = Tensor::ones(vec![d]);
         let scalar = rmsnorm(&x, &w, EPS).unwrap();
-        let simd   = rmsnorm_simd(&x, &w, EPS).unwrap();
+        let simd = rmsnorm_simd(&x, &w, EPS).unwrap();
         assert!(close_slice(scalar.as_slice(), simd.as_slice(), 1e-5));
     }
 
     #[test]
     fn test_simd_non_contiguous_input() {
         let orig = Tensor::from_vec(vec![1.0_f32, 3.0, 2.0, 4.0], vec![2, 2]).unwrap();
-        let x_t  = orig.transpose(0, 1).unwrap();
-        let w    = Tensor::ones(vec![2]);
+        let x_t = orig.transpose(0, 1).unwrap();
+        let w = Tensor::ones(vec![2]);
         let scalar = rmsnorm(&x_t, &w, EPS).unwrap();
-        let simd   = rmsnorm_simd(&x_t, &w, EPS).unwrap();
+        let simd = rmsnorm_simd(&x_t, &w, EPS).unwrap();
         assert!(close_slice(scalar.as_slice(), simd.as_slice(), 1e-5));
     }
 
@@ -208,7 +215,10 @@ mod tests {
         let x = Tensor::zeros(vec![8]);
         let w = Tensor::ones(vec![8]);
         let out = rmsnorm_simd(&x, &w, EPS).unwrap();
-        assert!(out.as_slice().iter().all(|v| !v.is_nan() && !v.is_infinite()));
+        assert!(out
+            .as_slice()
+            .iter()
+            .all(|v| !v.is_nan() && !v.is_infinite()));
     }
 
     // ── shape / error handling ────────────────────────────────────────────

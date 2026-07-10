@@ -66,51 +66,61 @@ pub enum CalibMethod {
 #[derive(Debug, Clone)]
 pub struct ActivationStats {
     /// Global minimum value seen.
-    pub global_min:     f32,
+    pub global_min: f32,
     /// Global maximum value seen.
-    pub global_max:     f32,
+    pub global_max: f32,
     /// Global maximum absolute value seen.
     pub global_abs_max: f32,
     /// Exponential moving average of per-batch `max_abs`.
     /// Initialised to the first batch's `max_abs`; updated on subsequent batches.
-    pub ema_abs_max:    f32,
+    pub ema_abs_max: f32,
     /// EMA smoothing factor (from `CalibMethod::Ema`; stored for incremental update).
-    ema_alpha:          f32,
+    ema_alpha: f32,
     /// Flat list of all observed absolute values (used for percentile computation).
     /// Kept only when `CalibMethod::Percentile` is selected.
-    abs_samples:        Option<Vec<f32>>,
+    abs_samples: Option<Vec<f32>>,
     /// Number of batches observed.
-    pub n_batches:      usize,
+    pub n_batches: usize,
     /// Total number of scalar elements seen.
-    pub n_elements:     usize,
+    pub n_elements: usize,
 }
 
 impl ActivationStats {
     fn new(method: CalibMethod) -> Self {
-        let ema_alpha    = if let CalibMethod::Ema { alpha } = method { alpha } else { 0.1 };
-        let abs_samples  = if matches!(method, CalibMethod::Percentile { .. }) { Some(Vec::new()) } else { None };
+        let ema_alpha = if let CalibMethod::Ema { alpha } = method {
+            alpha
+        } else {
+            0.1
+        };
+        let abs_samples = if matches!(method, CalibMethod::Percentile { .. }) {
+            Some(Vec::new())
+        } else {
+            None
+        };
         Self {
-            global_min:     f32::INFINITY,
-            global_max:     f32::NEG_INFINITY,
+            global_min: f32::INFINITY,
+            global_max: f32::NEG_INFINITY,
             global_abs_max: 0.0,
-            ema_abs_max:    0.0,
+            ema_abs_max: 0.0,
             ema_alpha,
             abs_samples,
-            n_batches:      0,
-            n_elements:     0,
+            n_batches: 0,
+            n_elements: 0,
         }
     }
 
     /// Ingest one batch of activation values.
     pub fn update(&mut self, values: &[f32]) {
-        if values.is_empty() { return; }
+        if values.is_empty() {
+            return;
+        }
 
-        let batch_min     = values.iter().cloned().fold(f32::INFINITY,     f32::min);
-        let batch_max     = values.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-        let batch_abs_max = values.iter().map(|v| v.abs()).fold(0.0_f32,   f32::max);
+        let batch_min = values.iter().cloned().fold(f32::INFINITY, f32::min);
+        let batch_max = values.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+        let batch_abs_max = values.iter().map(|v| v.abs()).fold(0.0_f32, f32::max);
 
-        self.global_min     = self.global_min.min(batch_min);
-        self.global_max     = self.global_max.max(batch_max);
+        self.global_min = self.global_min.min(batch_min);
+        self.global_max = self.global_max.max(batch_max);
         self.global_abs_max = self.global_abs_max.max(batch_abs_max);
 
         // EMA update
@@ -126,7 +136,7 @@ impl ActivationStats {
             samples.extend(values.iter().map(|v| v.abs()));
         }
 
-        self.n_batches  += 1;
+        self.n_batches += 1;
         self.n_elements += values.len();
     }
 
@@ -137,11 +147,13 @@ impl ActivationStats {
     /// Returns `1.0` if no data was ever observed (safe: zero activations stay zero).
     #[must_use]
     pub fn compute_scale(&self, method: CalibMethod) -> f32 {
-        if self.n_batches == 0 { return 1.0; }
+        if self.n_batches == 0 {
+            return 1.0;
+        }
 
         let effective_max = match method {
-            CalibMethod::MaxAbs           => self.global_abs_max,
-            CalibMethod::Ema { .. }       => self.ema_abs_max,
+            CalibMethod::MaxAbs => self.global_abs_max,
+            CalibMethod::Ema { .. } => self.ema_abs_max,
             CalibMethod::Percentile { percentile } => {
                 if let Some(ref samples) = self.abs_samples {
                     percentile_of_sorted(samples, percentile)
@@ -151,13 +163,19 @@ impl ActivationStats {
             }
         };
 
-        if effective_max == 0.0 { 1.0 } else { effective_max / 127.0 }
+        if effective_max == 0.0 {
+            1.0
+        } else {
+            effective_max / 127.0
+        }
     }
 }
 
 /// Compute the given percentile from an unsorted slice of non-negative f32 values.
 fn percentile_of_sorted(values: &[f32], p: f32) -> f32 {
-    if values.is_empty() { return 0.0; }
+    if values.is_empty() {
+        return 0.0;
+    }
     let mut sorted = values.to_vec();
     sorted.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let idx = ((p / 100.0) * (sorted.len() - 1) as f32).round() as usize;
@@ -204,14 +222,17 @@ impl CalibrationResult {
 /// [`finalize`]: Calibrator::finalize
 pub struct Calibrator {
     method: CalibMethod,
-    stats:  HashMap<String, ActivationStats>,
+    stats: HashMap<String, ActivationStats>,
 }
 
 impl Calibrator {
     /// Create a new calibrator with the given scale-computation method.
     #[must_use]
     pub fn new(method: CalibMethod) -> Self {
-        Self { method, stats: HashMap::new() }
+        Self {
+            method,
+            stats: HashMap::new(),
+        }
     }
 
     /// Record one activation tensor for `site`.
@@ -242,10 +263,15 @@ impl Calibrator {
     /// `observe` calls will continue accumulating into the same running stats.
     #[must_use]
     pub fn finalize(&self) -> CalibrationResult {
-        let scales = self.stats.iter()
+        let scales = self
+            .stats
+            .iter()
             .map(|(name, s)| (name.clone(), s.compute_scale(self.method)))
             .collect();
-        CalibrationResult { scales, method: self.method }
+        CalibrationResult {
+            scales,
+            method: self.method,
+        }
     }
 
     /// Reset all accumulated statistics (start fresh for a new calibration run).
@@ -255,7 +281,9 @@ impl Calibrator {
 
     /// Number of sites currently tracked.
     #[must_use]
-    pub fn n_sites(&self) -> usize { self.stats.len() }
+    pub fn n_sites(&self) -> usize {
+        self.stats.len()
+    }
 }
 
 // ── tests ─────────────────────────────────────────────────────────────────────
@@ -318,14 +346,17 @@ mod tests {
     #[test]
     fn stats_percentile_99_clips_outlier() {
         let method = CalibMethod::Percentile { percentile: 50.0 };
-        let mut s  = ActivationStats::new(method);
+        let mut s = ActivationStats::new(method);
         // 9 values in [0, 1] and one huge outlier
         let vals: Vec<f32> = (0..9).map(|i| i as f32 * 0.1).collect();
         s.update(&vals);
         s.update(&[100.0]); // outlier
-        // 50th percentile of {0, 0.1, …, 0.8, 100.0} should be much less than 100.
+                            // 50th percentile of {0, 0.1, …, 0.8, 100.0} should be much less than 100.
         let scale = s.compute_scale(method);
-        assert!(scale < 1.0, "scale={scale} should be < 1.0 (outlier clipped)");
+        assert!(
+            scale < 1.0,
+            "scale={scale} should be < 1.0 (outlier clipped)"
+        );
     }
 
     #[test]
@@ -334,7 +365,7 @@ mod tests {
         s.update(&[1.0, -3.0, 0.5]);
         s.update(&[4.0, -0.5, 2.0]);
         assert!((s.global_min - (-3.0)).abs() < 1e-6);
-        assert!((s.global_max - 4.0).abs()  < 1e-6);
+        assert!((s.global_max - 4.0).abs() < 1e-6);
     }
 
     #[test]
@@ -343,7 +374,7 @@ mod tests {
         s.update(&[1.0; 10]);
         s.update(&[2.0; 5]);
         assert_eq!(s.n_elements, 15);
-        assert_eq!(s.n_batches,   2);
+        assert_eq!(s.n_batches, 2);
     }
 
     #[test]
@@ -366,8 +397,8 @@ mod tests {
     #[test]
     fn calibrator_accumulates_across_batches() {
         let mut cal = Calibrator::new(CalibMethod::MaxAbs);
-        cal.observe("layer0.q", &[0.5, 0.2]);  // abs_max = 0.5
-        cal.observe("layer0.q", &[1.5, 0.1]);  // abs_max = 1.5
+        cal.observe("layer0.q", &[0.5, 0.2]); // abs_max = 0.5
+        cal.observe("layer0.q", &[1.5, 0.1]); // abs_max = 1.5
         let stats = cal.stats("layer0.q").unwrap();
         assert!((stats.global_abs_max - 1.5).abs() < 1e-6);
     }
@@ -390,9 +421,12 @@ mod tests {
         let mut cal = Calibrator::new(CalibMethod::MaxAbs);
         cal.observe("layer0", &[0.0, 2.54, -1.27]);
         let result = cal.finalize();
-        let scale  = result.scale("layer0").unwrap();
-        assert!((scale - 2.54 / 127.0).abs() < 1e-6,
-            "expected {}, got {scale}", 2.54 / 127.0);
+        let scale = result.scale("layer0").unwrap();
+        assert!(
+            (scale - 2.54 / 127.0).abs() < 1e-6,
+            "expected {}, got {scale}",
+            2.54 / 127.0
+        );
     }
 
     #[test]
@@ -426,7 +460,7 @@ mod tests {
         cal.observe("x", &[1.0]);
         let _r1 = cal.finalize();
         cal.observe("x", &[5.0]); // extend the same site
-        let r2  = cal.finalize();
+        let r2 = cal.finalize();
         // scale should now reflect max(1.0, 5.0) = 5.0
         let scale = r2.scale("x").unwrap();
         assert!((scale - 5.0 / 127.0).abs() < 1e-6);
@@ -466,7 +500,7 @@ mod tests {
     fn site_names_lists_all_observed() {
         let mut cal = Calibrator::new(CalibMethod::MaxAbs);
         cal.observe("alpha", &[1.0]);
-        cal.observe("beta",  &[2.0]);
+        cal.observe("beta", &[2.0]);
         let mut names = cal.site_names();
         names.sort_unstable();
         assert_eq!(names, vec!["alpha", "beta"]);

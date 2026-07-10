@@ -45,7 +45,8 @@ use crate::tensor::{Result, Tensor, TensorError};
 /// Implementors receive a mutable slice `row` of length `N` (the number of
 /// output columns) and transform it in-place.  The slice is guaranteed to be
 /// contiguous and fully accumulated before `apply_row` is called.
-pub trait FusedOp: Send + Sync { // CHANGED: Send+Sync so ops can be shared across threads later
+pub trait FusedOp: Send + Sync {
+    // CHANGED: Send+Sync so ops can be shared across threads later
     /// Transform one output row in-place.
     fn apply_row(&self, row: &mut [f32]);
 }
@@ -63,7 +64,8 @@ pub struct BiasAdd {
 
 impl BiasAdd {
     /// Construct from any slice.
-    pub fn new(bias: impl Into<Vec<f32>>) -> Self { // CHANGED
+    pub fn new(bias: impl Into<Vec<f32>>) -> Self {
+        // CHANGED
         Self { bias: bias.into() }
     }
 }
@@ -96,7 +98,7 @@ impl ActivationFn {
     #[inline]
     fn apply(self, x: f32) -> f32 {
         match self {
-            Self::ReLU    => x.max(0.0),
+            Self::ReLU => x.max(0.0),
             Self::Sigmoid => 1.0 / (1.0 + (-x).exp()),
             // CHANGED: fast tanh GeLU — matches PyTorch's gelu(approximate='tanh')
             Self::GeLU => {
@@ -157,17 +159,14 @@ impl FusedOp for Chain {
 ///   `BiasAdd` length does not match `N`.
 /// * [`TensorError::ShapeMismatch`] if inner dimensions are incompatible.
 #[must_use = "returns a new tensor"] // CHANGED
-pub fn matmul_fused(
-    a: &Tensor<f32>,
-    b: &Tensor<f32>,
-    ops: &[&dyn FusedOp],
-) -> Result<Tensor<f32>> {
+pub fn matmul_fused(a: &Tensor<f32>, b: &Tensor<f32>, ops: &[&dyn FusedOp]) -> Result<Tensor<f32>> {
     // ── dimensionality / shape checks ──────────────────────────────────────
     if a.ndim() != 2 {
         return Err(TensorError::InvalidShape {
             reason: format!(
                 "matmul_fused: `a` must be 2-D, got {}D (shape {:?})",
-                a.ndim(), a.dims()
+                a.ndim(),
+                a.dims()
             ),
         });
     }
@@ -175,18 +174,19 @@ pub fn matmul_fused(
         return Err(TensorError::InvalidShape {
             reason: format!(
                 "matmul_fused: `b` must be 2-D, got {}D (shape {:?})",
-                b.ndim(), b.dims()
+                b.ndim(),
+                b.dims()
             ),
         });
     }
 
-    let [m, k]  = [a.dims()[0], a.dims()[1]];
+    let [m, k] = [a.dims()[0], a.dims()[1]];
     let [k2, n] = [b.dims()[0], b.dims()[1]];
 
     if k != k2 {
         return Err(TensorError::ShapeMismatch {
             expected: vec![m, k],
-            got:      vec![k2, n],
+            got: vec![k2, n],
         });
     }
 
@@ -200,8 +200,16 @@ pub fn matmul_fused(
     }
 
     // ── contiguity gate ────────────────────────────────────────────────────
-    let a_c: Cow<Tensor<f32>> = if a.is_contiguous() { Cow::Borrowed(a) } else { Cow::Owned(a.contiguous()) };
-    let b_c: Cow<Tensor<f32>> = if b.is_contiguous() { Cow::Borrowed(b) } else { Cow::Owned(b.contiguous()) };
+    let a_c: Cow<Tensor<f32>> = if a.is_contiguous() {
+        Cow::Borrowed(a)
+    } else {
+        Cow::Owned(a.contiguous())
+    };
+    let b_c: Cow<Tensor<f32>> = if b.is_contiguous() {
+        Cow::Borrowed(b)
+    } else {
+        Cow::Owned(b.contiguous())
+    };
 
     let a_data = a_c.as_slice();
     let b_data = b_c.as_slice();
@@ -238,7 +246,9 @@ mod tests {
     use crate::ops::matmul::matmul_naive;
 
     const EPS: f32 = 1e-5;
-    fn close(a: f32, b: f32) -> bool { (a - b).abs() < EPS }
+    fn close(a: f32, b: f32) -> bool {
+        (a - b).abs() < EPS
+    }
     fn close_slice(a: &[f32], b: &[f32]) -> bool {
         a.len() == b.len() && a.iter().zip(b).all(|(x, y)| close(*x, *y))
     }
@@ -249,8 +259,8 @@ mod tests {
     fn test_no_ops_equals_naive() {
         let a = Tensor::from_vec(vec![1.0_f32, 2.0, 3.0, 4.0], vec![2, 2]).unwrap();
         let b = Tensor::from_vec(vec![5.0_f32, 6.0, 7.0, 8.0], vec![2, 2]).unwrap();
-        let fused  = matmul_fused(&a, &b, &[]).unwrap();
-        let naive  = matmul_naive(&a, &b).unwrap();
+        let fused = matmul_fused(&a, &b, &[]).unwrap();
+        let naive = matmul_naive(&a, &b).unwrap();
         assert!(close_slice(fused.as_slice(), naive.as_slice()));
     }
 
@@ -260,8 +270,8 @@ mod tests {
     fn test_matmul_bias_equals_sequential() {
         // CHANGED: fused(A, B, [bias]) must equal naive(A,B) + broadcast bias
         let (m, k, n) = (3, 4, 5);
-        let a_data: Vec<f32> = (0..(m*k)).map(|i| i as f32 * 0.1).collect();
-        let b_data: Vec<f32> = (0..(k*n)).map(|i| i as f32 * 0.05).collect();
+        let a_data: Vec<f32> = (0..(m * k)).map(|i| i as f32 * 0.1).collect();
+        let b_data: Vec<f32> = (0..(k * n)).map(|i| i as f32 * 0.05).collect();
         let bias_data: Vec<f32> = (0..n).map(|j| j as f32 * 0.2).collect();
 
         let a = Tensor::from_vec(a_data.clone(), vec![m, k]).unwrap();
@@ -290,7 +300,7 @@ mod tests {
         let b = Tensor::from_vec(vec![5.0_f32, 6.0, 7.0, 8.0], vec![2, 2]).unwrap();
         let zero_bias = BiasAdd::new(vec![0.0_f32, 0.0]);
         let fused = matmul_fused(&a, &b, &[&zero_bias]).unwrap();
-        let naive  = matmul_naive(&a, &b).unwrap();
+        let naive = matmul_naive(&a, &b).unwrap();
         assert!(close_slice(fused.as_slice(), naive.as_slice()));
     }
 
@@ -303,15 +313,15 @@ mod tests {
         let a = Tensor::from_vec(vec![-1.0_f32, 2.0, 3.0, -4.0], vec![2, 2]).unwrap();
         let id = Tensor::from_vec(vec![1.0_f32, 0.0, 0.0, 1.0], vec![2, 2]).unwrap();
         let relu = Activation(ActivationFn::ReLU);
-        let out  = matmul_fused(&a, &id, &[&relu]).unwrap();
+        let out = matmul_fused(&a, &id, &[&relu]).unwrap();
         assert!(close_slice(out.as_slice(), &[0.0, 2.0, 3.0, 0.0]));
     }
 
     #[test]
     fn test_relu_all_positive_unchanged() {
-        let a  = Tensor::from_vec(vec![1.0_f32, 2.0, 3.0, 4.0], vec![2, 2]).unwrap();
+        let a = Tensor::from_vec(vec![1.0_f32, 2.0, 3.0, 4.0], vec![2, 2]).unwrap();
         let id = Tensor::from_vec(vec![1.0_f32, 0.0, 0.0, 1.0], vec![2, 2]).unwrap();
-        let relu  = Activation(ActivationFn::ReLU);
+        let relu = Activation(ActivationFn::ReLU);
         let fused = matmul_fused(&a, &id, &[&relu]).unwrap();
         let naive = matmul_naive(&a, &id).unwrap();
         // all-positive input — ReLU is identity
@@ -322,13 +332,15 @@ mod tests {
     fn test_sigmoid_range() {
         // CHANGED: sigmoid output must lie strictly in (0, 1) for any finite input
         let (m, k, n) = (4, 4, 4);
-        let a = Tensor::from_vec((0..(m*k)).map(|i| i as f32 - 8.0).collect(), vec![m, k]).unwrap();
-        let b = Tensor::from_vec((0..(k*n)).map(|i| (i as f32) * 0.1).collect(), vec![k, n]).unwrap();
-        let sig   = Activation(ActivationFn::Sigmoid);
+        let a =
+            Tensor::from_vec((0..(m * k)).map(|i| i as f32 - 8.0).collect(), vec![m, k]).unwrap();
+        let b =
+            Tensor::from_vec((0..(k * n)).map(|i| (i as f32) * 0.1).collect(), vec![k, n]).unwrap();
+        let sig = Activation(ActivationFn::Sigmoid);
         let fused = matmul_fused(&a, &b, &[&sig]).unwrap();
         for &v in fused.as_slice() {
             // CHANGED: closed [0,1] — f32 sigmoid saturates to exactly 0.0/1.0 for extreme inputs
-            assert!(v >= 0.0 && v <= 1.0, "sigmoid output {v} not in [0,1]");
+            assert!((0.0..=1.0).contains(&v), "sigmoid output {v} not in [0,1]");
         }
     }
 
@@ -338,20 +350,28 @@ mod tests {
         let act = Activation(ActivationFn::GeLU);
 
         // GeLU(0) = 0
-        let id   = Tensor::from_vec(vec![1.0_f32], vec![1, 1]).unwrap();
+        let id = Tensor::from_vec(vec![1.0_f32], vec![1, 1]).unwrap();
         let zero = Tensor::from_vec(vec![0.0_f32], vec![1, 1]).unwrap();
-        let out  = matmul_fused(&zero, &id, &[&act]).unwrap();
+        let out = matmul_fused(&zero, &id, &[&act]).unwrap();
         assert!(close(out.as_slice()[0], 0.0));
 
         // GeLU(x) ≈ x for large positive x (asymptotically x)
         let large = Tensor::from_vec(vec![10.0_f32], vec![1, 1]).unwrap();
-        let out2  = matmul_fused(&large, &id, &[&act]).unwrap();
-        assert!(out2.as_slice()[0] > 9.9, "GeLU(10) should ≈ 10, got {}", out2.as_slice()[0]);
+        let out2 = matmul_fused(&large, &id, &[&act]).unwrap();
+        assert!(
+            out2.as_slice()[0] > 9.9,
+            "GeLU(10) should ≈ 10, got {}",
+            out2.as_slice()[0]
+        );
 
         // GeLU(x) ≈ 0 for large negative x
-        let neg   = Tensor::from_vec(vec![-10.0_f32], vec![1, 1]).unwrap();
-        let out3  = matmul_fused(&neg, &id, &[&act]).unwrap();
-        assert!(out3.as_slice()[0].abs() < 1e-3, "GeLU(-10) should ≈ 0, got {}", out3.as_slice()[0]);
+        let neg = Tensor::from_vec(vec![-10.0_f32], vec![1, 1]).unwrap();
+        let out3 = matmul_fused(&neg, &id, &[&act]).unwrap();
+        assert!(
+            out3.as_slice()[0].abs() < 1e-3,
+            "GeLU(-10) should ≈ 0, got {}",
+            out3.as_slice()[0]
+        );
     }
 
     // ── matmul + bias + activation (chained) ──────────────────────────────
@@ -360,24 +380,29 @@ mod tests {
     fn test_matmul_bias_relu_chained() {
         // CHANGED: verify chained ops == sequential application
         let (m, k, n) = (4, 3, 4);
-        let a_data: Vec<f32> = (0..(m*k)).map(|i| i as f32 - 6.0).collect();
-        let b_data: Vec<f32> = (0..(k*n)).map(|i| i as f32 * 0.3 - 1.5).collect();
-        let bias_data        = vec![-0.5_f32, 0.0, 0.5, 1.0];
+        let a_data: Vec<f32> = (0..(m * k)).map(|i| i as f32 - 6.0).collect();
+        let b_data: Vec<f32> = (0..(k * n)).map(|i| i as f32 * 0.3 - 1.5).collect();
+        let bias_data = vec![-0.5_f32, 0.0, 0.5, 1.0];
 
         let a = Tensor::from_vec(a_data, vec![m, k]).unwrap();
         let b = Tensor::from_vec(b_data, vec![k, n]).unwrap();
 
         // sequential reference
         let plain = matmul_naive(&a, &b).unwrap();
-        let expected: Vec<f32> = plain.as_slice().iter().enumerate().map(|(idx, &v)| {
-            let j = idx % n;
-            (v + bias_data[j]).max(0.0) // bias then relu
-        }).collect();
+        let expected: Vec<f32> = plain
+            .as_slice()
+            .iter()
+            .enumerate()
+            .map(|(idx, &v)| {
+                let j = idx % n;
+                (v + bias_data[j]).max(0.0) // bias then relu
+            })
+            .collect();
 
         // fused
         let bias_op = BiasAdd::new(bias_data);
         let relu_op = Activation(ActivationFn::ReLU);
-        let fused   = matmul_fused(&a, &b, &[&bias_op, &relu_op]).unwrap();
+        let fused = matmul_fused(&a, &b, &[&bias_op, &relu_op]).unwrap();
 
         assert_eq!(fused.dims(), &[m, n]);
         assert!(close_slice(fused.as_slice(), &expected));
@@ -394,7 +419,7 @@ mod tests {
             Box::new(Activation(ActivationFn::ReLU)),
         ]);
 
-        let fused_chain  = matmul_fused(&a, &b, &[&chain]).unwrap();
+        let fused_chain = matmul_fused(&a, &b, &[&chain]).unwrap();
 
         let bias_op = BiasAdd::new(vec![1.0_f32, -1.0]);
         let relu_op = Activation(ActivationFn::ReLU);
@@ -408,10 +433,10 @@ mod tests {
     #[test]
     fn test_non_contiguous_input() {
         let a_orig = Tensor::from_vec(vec![1.0_f32, 3.0, 2.0, 4.0], vec![2, 2]).unwrap();
-        let a_t    = a_orig.transpose(0, 1).unwrap(); // non-contiguous [[1,2],[3,4]]
-        let id     = Tensor::from_vec(vec![1.0_f32, 0.0, 0.0, 1.0], vec![2, 2]).unwrap();
-        let relu   = Activation(ActivationFn::ReLU);
-        let out    = matmul_fused(&a_t, &id, &[&relu]).unwrap();
+        let a_t = a_orig.transpose(0, 1).unwrap(); // non-contiguous [[1,2],[3,4]]
+        let id = Tensor::from_vec(vec![1.0_f32, 0.0, 0.0, 1.0], vec![2, 2]).unwrap();
+        let relu = Activation(ActivationFn::ReLU);
+        let out = matmul_fused(&a_t, &id, &[&relu]).unwrap();
         // A_t @ I = A_t contiguous = [[1,2],[3,4]], all positive -> unchanged
         assert!(close_slice(out.as_slice(), &[1.0, 2.0, 3.0, 4.0]));
     }
@@ -422,13 +447,19 @@ mod tests {
     fn test_shape_mismatch_error() {
         let a = Tensor::from_vec(vec![1.0_f32; 4], vec![2, 2]).unwrap();
         let b = Tensor::from_vec(vec![1.0_f32; 3], vec![3, 1]).unwrap();
-        assert!(matches!(matmul_fused(&a, &b, &[]), Err(TensorError::ShapeMismatch { .. })));
+        assert!(matches!(
+            matmul_fused(&a, &b, &[]),
+            Err(TensorError::ShapeMismatch { .. })
+        ));
     }
 
     #[test]
     fn test_non_2d_error() {
         let a = Tensor::from_vec(vec![1.0_f32; 8], vec![2, 2, 2]).unwrap();
         let b = Tensor::from_vec(vec![1.0_f32; 4], vec![2, 2]).unwrap();
-        assert!(matches!(matmul_fused(&a, &b, &[]), Err(TensorError::InvalidShape { .. })));
+        assert!(matches!(
+            matmul_fused(&a, &b, &[]),
+            Err(TensorError::InvalidShape { .. })
+        ));
     }
 }

@@ -596,7 +596,7 @@ mod tests {
 
         // Alignment padding to 32 bytes
         let current_len = data.len();
-        let aligned = ((current_len + 31) / 32) * 32;
+        let aligned = current_len.div_ceil(32) * 32;
         data.resize(aligned, 0);
 
         // Tensor data: 32 f32 values

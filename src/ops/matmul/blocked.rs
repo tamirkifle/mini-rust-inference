@@ -156,38 +156,38 @@ pub fn matmul_blocked_with_block_size(
     // ── x86_64 and other: tiled i-p-j loop ────────────────────────────────
     #[cfg(not(target_arch = "aarch64"))]
     {
-    let mut c_data = vec![0.0_f32; m * n];
+        let mut c_data = vec![0.0_f32; m * n];
 
-    let mut ii = 0;
-    while ii < m {
-        let i_end = (ii + block).min(m);
+        let mut ii = 0;
+        while ii < m {
+            let i_end = (ii + block).min(m);
 
-        let mut pp = 0;
-        while pp < k {
-            let p_end = (pp + block).min(k);
+            let mut pp = 0;
+            while pp < k {
+                let p_end = (pp + block).min(k);
 
-            let mut jj = 0;
-            while jj < n {
-                let j_end = (jj + block).min(n);
+                let mut jj = 0;
+                while jj < n {
+                    let j_end = (jj + block).min(n);
 
-                // micro-kernel: (i_end-ii) × (p_end-pp) × (j_end-jj) tile
-                for i in ii..i_end {
-                    for p in pp..p_end {
-                        let a_ip = a_data[i * k + p];
-                        for j in jj..j_end {
-                            c_data[i * n + j] += a_ip * b_data[p * n + j];
+                    // micro-kernel: (i_end-ii) × (p_end-pp) × (j_end-jj) tile
+                    for i in ii..i_end {
+                        for p in pp..p_end {
+                            let a_ip = a_data[i * k + p];
+                            for j in jj..j_end {
+                                c_data[i * n + j] += a_ip * b_data[p * n + j];
+                            }
                         }
                     }
+
+                    jj += block;
                 }
-
-                jj += block;
+                pp += block;
             }
-            pp += block;
+            ii += block;
         }
-        ii += block;
-    }
 
-    Tensor::from_vec(c_data, vec![m, n])
+        Tensor::from_vec(c_data, vec![m, n])
     }
 }
 
@@ -229,8 +229,13 @@ mod tests {
     #[test]
     fn test_blocked_not_slower_than_naive_128() {
         let n = 128_usize;
-        let a = Tensor::from_vec((0..n * n).map(|i| i as f32 * 0.001).collect(), vec![n, n]).unwrap();
-        let b = Tensor::from_vec((0..n * n).map(|i| (n * n - i) as f32 * 0.001).collect(), vec![n, n]).unwrap();
+        let a =
+            Tensor::from_vec((0..n * n).map(|i| i as f32 * 0.001).collect(), vec![n, n]).unwrap();
+        let b = Tensor::from_vec(
+            (0..n * n).map(|i| (n * n - i) as f32 * 0.001).collect(),
+            vec![n, n],
+        )
+        .unwrap();
         // correctness is sufficient; timing is validated by criterion benches
         assert_matches_naive(&a, &b);
     }
@@ -238,8 +243,13 @@ mod tests {
     #[test]
     fn test_blocked_not_slower_than_naive_512() {
         let n = 512_usize;
-        let a = Tensor::from_vec((0..n * n).map(|i| i as f32 * 0.001).collect(), vec![n, n]).unwrap();
-        let b = Tensor::from_vec((0..n * n).map(|i| (n * n - i) as f32 * 0.001).collect(), vec![n, n]).unwrap();
+        let a =
+            Tensor::from_vec((0..n * n).map(|i| i as f32 * 0.001).collect(), vec![n, n]).unwrap();
+        let b = Tensor::from_vec(
+            (0..n * n).map(|i| (n * n - i) as f32 * 0.001).collect(),
+            vec![n, n],
+        )
+        .unwrap();
         assert_matches_naive(&a, &b);
     }
 
@@ -274,16 +284,26 @@ mod tests {
     #[test]
     fn test_matches_naive_square_32() {
         let n = 32_usize;
-        let a = Tensor::from_vec((0..(n * n)).map(|i| i as f32 * 0.01).collect(), vec![n, n]).unwrap();
-        let b = Tensor::from_vec((0..(n * n)).map(|i| (n * n - i) as f32 * 0.005).collect(), vec![n, n]).unwrap();
+        let a =
+            Tensor::from_vec((0..(n * n)).map(|i| i as f32 * 0.01).collect(), vec![n, n]).unwrap();
+        let b = Tensor::from_vec(
+            (0..(n * n)).map(|i| (n * n - i) as f32 * 0.005).collect(),
+            vec![n, n],
+        )
+        .unwrap();
         assert_matches_naive(&a, &b);
     }
 
     #[test]
     fn test_matches_naive_non_multiple_of_block() {
         let (m, k, n) = (50, 70, 40);
-        let a = Tensor::from_vec((0..(m * k)).map(|i| i as f32 * 0.003).collect(), vec![m, k]).unwrap();
-        let b = Tensor::from_vec((0..(k * n)).map(|i| (k * n - i) as f32 * 0.002).collect(), vec![k, n]).unwrap();
+        let a =
+            Tensor::from_vec((0..(m * k)).map(|i| i as f32 * 0.003).collect(), vec![m, k]).unwrap();
+        let b = Tensor::from_vec(
+            (0..(k * n)).map(|i| (k * n - i) as f32 * 0.002).collect(),
+            vec![k, n],
+        )
+        .unwrap();
         assert_matches_naive(&a, &b);
     }
 
@@ -306,8 +326,13 @@ mod tests {
     #[test]
     fn test_matches_naive_larger_non_square() {
         let (m, k, n) = (100, 80, 60);
-        let a = Tensor::from_vec((0..(m * k)).map(|i| i as f32 * 0.001).collect(), vec![m, k]).unwrap();
-        let b = Tensor::from_vec((0..(k * n)).map(|i| (k * n - i) as f32 * 0.001).collect(), vec![k, n]).unwrap();
+        let a =
+            Tensor::from_vec((0..(m * k)).map(|i| i as f32 * 0.001).collect(), vec![m, k]).unwrap();
+        let b = Tensor::from_vec(
+            (0..(k * n)).map(|i| (k * n - i) as f32 * 0.001).collect(),
+            vec![k, n],
+        )
+        .unwrap();
         assert_matches_naive(&a, &b);
     }
 

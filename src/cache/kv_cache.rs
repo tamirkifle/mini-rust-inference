@@ -62,22 +62,17 @@ impl KvCache {
     ///
     /// Panics if any dimension is zero (checked via debug assertion).
     #[must_use]
-    pub fn new(
-        n_layers:    usize,
-        max_seq_len: usize,
-        n_kv_heads:  usize,
-        head_dim:    usize,
-    ) -> Self {
-        debug_assert!(n_layers > 0,    "KvCache: n_layers must be > 0");
+    pub fn new(n_layers: usize, max_seq_len: usize, n_kv_heads: usize, head_dim: usize) -> Self {
+        debug_assert!(n_layers > 0, "KvCache: n_layers must be > 0");
         debug_assert!(max_seq_len > 0, "KvCache: max_seq_len must be > 0");
-        debug_assert!(n_kv_heads > 0,  "KvCache: n_kv_heads must be > 0");
-        debug_assert!(head_dim > 0,    "KvCache: head_dim must be > 0");
+        debug_assert!(n_kv_heads > 0, "KvCache: n_kv_heads must be > 0");
+        debug_assert!(head_dim > 0, "KvCache: head_dim must be > 0");
 
-        let kv_dim     = n_kv_heads * head_dim;
+        let kv_dim = n_kv_heads * head_dim;
         let layer_size = max_seq_len * kv_dim;
         Self {
-            k_data:      vec![vec![0.0_f32; layer_size]; n_layers],
-            v_data:      vec![vec![0.0_f32; layer_size]; n_layers],
+            k_data: vec![vec![0.0_f32; layer_size]; n_layers],
+            v_data: vec![vec![0.0_f32; layer_size]; n_layers],
             n_layers,
             max_seq_len,
             kv_dim,
@@ -149,15 +144,21 @@ impl KvCache {
 
     /// Number of transformer layers this cache was built for.
     #[must_use]
-    pub fn n_layers(&self) -> usize { self.n_layers }
+    pub fn n_layers(&self) -> usize {
+        self.n_layers
+    }
 
     /// Maximum number of sequence positions this cache can hold.
     #[must_use]
-    pub fn max_seq_len(&self) -> usize { self.max_seq_len }
+    pub fn max_seq_len(&self) -> usize {
+        self.max_seq_len
+    }
 
     /// Width of each K/V row: `n_kv_heads * head_dim`.
     #[must_use]
-    pub fn kv_dim(&self) -> usize { self.kv_dim }
+    pub fn kv_dim(&self) -> usize {
+        self.kv_dim
+    }
 
     // ── bulk operations ────────────────────────────────────────────────────
 
@@ -179,7 +180,7 @@ impl KvCache {
         let kv_dim = self.kv_dim;
         for layer in 0..self.n_layers {
             let start = from_pos * kv_dim;
-            let end   = until_pos * kv_dim;
+            let end = until_pos * kv_dim;
             if end <= self.k_data[layer].len() {
                 self.k_data[layer][start..end].fill(0.0_f32);
                 self.v_data[layer][start..end].fill(0.0_f32);
@@ -222,10 +223,7 @@ impl KvCache {
     fn read_check(&self, layer: usize, seq_len: usize) -> Result<()> {
         if layer >= self.n_layers {
             return Err(TensorError::InvalidShape {
-                reason: format!(
-                    "KvCache::read: layer {layer} >= n_layers {}",
-                    self.n_layers
-                ),
+                reason: format!("KvCache::read: layer {layer} >= n_layers {}", self.n_layers),
             });
         }
         if seq_len == 0 {
@@ -260,8 +258,8 @@ mod tests {
     #[test]
     fn test_kvcache_construction_kv_dim() {
         let c = make_cache(4, 128, 8, 64);
-        assert_eq!(c.kv_dim(),      8 * 64);
-        assert_eq!(c.n_layers(),    4);
+        assert_eq!(c.kv_dim(), 8 * 64);
+        assert_eq!(c.n_layers(), 4);
         assert_eq!(c.max_seq_len(), 128);
     }
 
@@ -276,10 +274,10 @@ mod tests {
 
     #[test]
     fn test_kvcache_write_read_k_roundtrip() {
-        let mut c = make_cache(1, 8, 2, 4);   // kv_dim = 8
+        let mut c = make_cache(1, 8, 2, 4); // kv_dim = 8
         let row = vec![1.0_f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
         c.write_k(0, 3, &row).unwrap();
-        let k = c.read_k(0, 4).unwrap();      // read 4 rows → [4, 8]
+        let k = c.read_k(0, 4).unwrap(); // read 4 rows → [4, 8]
         assert_eq!(k.dims(), &[4, 8]);
         assert_eq!(&k.as_slice()[24..32], row.as_slice()); // row 3 starts at offset 3*8=24
     }
@@ -296,7 +294,7 @@ mod tests {
 
     #[test]
     fn test_kvcache_multiple_layers_isolated() {
-        let mut c = make_cache(3, 4, 1, 4);    // kv_dim = 4
+        let mut c = make_cache(3, 4, 1, 4); // kv_dim = 4
         let row0 = vec![1.0_f32, 1.0, 1.0, 1.0];
         let row2 = vec![2.0_f32, 2.0, 2.0, 2.0];
         c.write_k(0, 0, &row0).unwrap();
@@ -314,15 +312,15 @@ mod tests {
 
     #[test]
     fn test_kvcache_sequential_writes_accumulate() {
-        let mut c = make_cache(1, 4, 1, 2);   // kv_dim = 2
+        let mut c = make_cache(1, 4, 1, 2); // kv_dim = 2
         for pos in 0..4_usize {
             c.write_k(0, pos, &[pos as f32, pos as f32 * 10.0]).unwrap();
         }
         let k = c.read_k(0, 4).unwrap();
         assert_eq!(k.dims(), &[4, 2]);
         for pos in 0..4_usize {
-            assert!((k.as_slice()[pos * 2]      - pos as f32).abs()        < 1e-7);
-            assert!((k.as_slice()[pos * 2 + 1]  - pos as f32 * 10.0).abs() < 1e-7);
+            assert!((k.as_slice()[pos * 2] - pos as f32).abs() < 1e-7);
+            assert!((k.as_slice()[pos * 2 + 1] - pos as f32 * 10.0).abs() < 1e-7);
         }
     }
 

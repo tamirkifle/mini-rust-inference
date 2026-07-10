@@ -24,8 +24,8 @@
 //! println!("TTFT proxy: {:.2} ms/token (prefill)", metrics.ms_per_prefill_token());
 //! ```
 
-use std::time::Instant;
 use crate::memory::stats::query_rss;
+use std::time::Instant;
 
 // ── Timer ─────────────────────────────────────────────────────────────────────
 
@@ -38,7 +38,9 @@ impl Timer {
     /// Start the timer.
     #[must_use]
     pub fn start() -> Self {
-        Self { start: Instant::now() }
+        Self {
+            start: Instant::now(),
+        }
     }
 
     /// Elapsed time in milliseconds since [`Timer::start`].
@@ -78,7 +80,9 @@ impl InferenceMetrics {
     /// benchmarks that measure very short runs).
     #[must_use]
     pub fn tokens_per_second(&self) -> f64 {
-        if self.total_ms <= 0.0 { return 0.0; }
+        if self.total_ms <= 0.0 {
+            return 0.0;
+        }
         self.n_generated_tokens as f64 / (self.total_ms / 1_000.0)
     }
 
@@ -91,7 +95,9 @@ impl InferenceMetrics {
     /// Returns 0.0 when `n_prompt_tokens == 0`.
     #[must_use]
     pub fn ms_per_prefill_token(&self) -> f64 {
-        if self.n_prompt_tokens == 0 { return 0.0; }
+        if self.n_prompt_tokens == 0 {
+            return 0.0;
+        }
         self.total_ms / self.n_prompt_tokens as f64
     }
 
@@ -100,7 +106,9 @@ impl InferenceMetrics {
     /// Returns 0.0 when `n_generated_tokens == 0`.
     #[must_use]
     pub fn ms_per_decode_token(&self) -> f64 {
-        if self.n_generated_tokens == 0 { return 0.0; }
+        if self.n_generated_tokens == 0 {
+            return 0.0;
+        }
         self.total_ms / self.n_generated_tokens as f64
     }
 
@@ -179,9 +187,13 @@ pub fn measure_generate<F: FnOnce()>(
 mod tests {
     use super::*;
 
-    fn metrics(total_ms: f64, n_prompt: usize, n_gen: usize, rss_b: usize, rss_a: usize)
-        -> InferenceMetrics
-    {
+    fn metrics(
+        total_ms: f64,
+        n_prompt: usize,
+        n_gen: usize,
+        rss_b: usize,
+        rss_a: usize,
+    ) -> InferenceMetrics {
         InferenceMetrics {
             total_ms,
             n_prompt_tokens: n_prompt,
@@ -197,8 +209,11 @@ mod tests {
     fn test_tokens_per_second_basic() {
         let m = metrics(1_000.0, 5, 10, 0, 0);
         // 10 tokens / 1.0 sec = 10.0
-        assert!((m.tokens_per_second() - 10.0).abs() < 1e-6,
-            "expected 10.0, got {}", m.tokens_per_second());
+        assert!(
+            (m.tokens_per_second() - 10.0).abs() < 1e-6,
+            "expected 10.0, got {}",
+            m.tokens_per_second()
+        );
     }
 
     #[test]
@@ -279,8 +294,11 @@ mod tests {
         let m = measure_generate(1, 1, || {
             std::thread::sleep(std::time::Duration::from_millis(5));
         });
-        assert!(m.total_ms >= 1.0,
-            "expected at least 1 ms elapsed, got {:.3} ms", m.total_ms);
+        assert!(
+            m.total_ms >= 1.0,
+            "expected at least 1 ms elapsed, got {:.3} ms",
+            m.total_ms
+        );
     }
 
     // ── Timer ─────────────────────────────────────────────────────────────
@@ -297,9 +315,12 @@ mod tests {
     fn test_timer_elapsed_ms_secs_consistent() {
         let t = Timer::start();
         std::thread::sleep(std::time::Duration::from_millis(10));
-        let ms   = t.elapsed_ms();
+        let ms = t.elapsed_ms();
         let secs = t.elapsed_secs();
-        assert!((ms - secs * 1_000.0).abs() < 1.0,
-            "ms={ms:.3} should equal secs*1000={:.3}", secs * 1_000.0);
+        assert!(
+            (ms - secs * 1_000.0).abs() < 1.0,
+            "ms={ms:.3} should equal secs*1000={:.3}",
+            secs * 1_000.0
+        );
     }
 }

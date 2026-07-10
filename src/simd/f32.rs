@@ -75,13 +75,13 @@ mod x86 {
         // fold upper 128 bits onto lower 128 bits
         let hi128 = _mm256_extractf128_ps(v, 1);
         let lo128 = _mm256_castps256_ps128(v);
-        let sum4  = _mm_add_ps(lo128, hi128);
+        let sum4 = _mm_add_ps(lo128, hi128);
         // [a,b,c,d] → shuffle to [b,a,d,c], then add: [a+b, a+b, c+d, c+d]
-        let shuf  = _mm_shuffle_ps(sum4, sum4, 0b10_11_00_01);
-        let sum2  = _mm_add_ps(sum4, shuf);
+        let shuf = _mm_shuffle_ps(sum4, sum4, 0b10_11_00_01);
+        let sum2 = _mm_add_ps(sum4, shuf);
         // movehl gives [c+d, c+d, _, _]; add low scalar
         let shuf2 = _mm_movehl_ps(sum2, sum2);
-        let sum1  = _mm_add_ss(sum2, shuf2);
+        let sum1 = _mm_add_ss(sum2, shuf2);
         _mm_cvtss_f32(sum1)
     }
 
@@ -89,9 +89,9 @@ mod x86 {
     /// Requires AVX2.
     #[target_feature(enable = "avx2")]
     pub(super) unsafe fn hsum(a: &[f32]) -> f32 {
-        let n      = a.len();
+        let n = a.len();
         let chunks = n / 8;
-        let p      = a.as_ptr();
+        let p = a.as_ptr();
         let mut acc = _mm256_setzero_ps();
         for i in 0..chunks {
             acc = _mm256_add_ps(acc, _mm256_loadu_ps(p.add(i * 8)));
@@ -103,10 +103,10 @@ mod x86 {
     /// Requires AVX2 + FMA.
     #[target_feature(enable = "avx2,fma")]
     pub(super) unsafe fn dot(a: &[f32], b: &[f32]) -> f32 {
-        let n      = a.len();    // caller guarantees a.len() == b.len()
+        let n = a.len(); // caller guarantees a.len() == b.len()
         let chunks = n / 8;
-        let ap     = a.as_ptr();
-        let bp     = b.as_ptr();
+        let ap = a.as_ptr();
+        let bp = b.as_ptr();
         let mut acc = _mm256_setzero_ps();
         for i in 0..chunks {
             let va = _mm256_loadu_ps(ap.add(i * 8));
@@ -120,11 +120,11 @@ mod x86 {
     /// Requires AVX2.
     #[target_feature(enable = "avx2")]
     pub(super) unsafe fn add_into(dst: &mut [f32], a: &[f32], b: &[f32]) {
-        let n      = dst.len();
+        let n = dst.len();
         let chunks = n / 8;
-        let dp     = dst.as_mut_ptr();
-        let ap     = a.as_ptr();
-        let bp     = b.as_ptr();
+        let dp = dst.as_mut_ptr();
+        let ap = a.as_ptr();
+        let bp = b.as_ptr();
         for i in 0..chunks {
             let va = _mm256_loadu_ps(ap.add(i * 8));
             let vb = _mm256_loadu_ps(bp.add(i * 8));
@@ -139,11 +139,11 @@ mod x86 {
     /// Requires AVX2.
     #[target_feature(enable = "avx2")]
     pub(super) unsafe fn mul_into(dst: &mut [f32], a: &[f32], b: &[f32]) {
-        let n      = dst.len();
+        let n = dst.len();
         let chunks = n / 8;
-        let dp     = dst.as_mut_ptr();
-        let ap     = a.as_ptr();
-        let bp     = b.as_ptr();
+        let dp = dst.as_mut_ptr();
+        let ap = a.as_ptr();
+        let bp = b.as_ptr();
         for i in 0..chunks {
             let va = _mm256_loadu_ps(ap.add(i * 8));
             let vb = _mm256_loadu_ps(bp.add(i * 8));
@@ -158,11 +158,11 @@ mod x86 {
     /// Requires AVX2.
     #[target_feature(enable = "avx2")]
     pub(super) unsafe fn scale_into(dst: &mut [f32], src: &[f32], s: f32) {
-        let n      = dst.len();
+        let n = dst.len();
         let chunks = n / 8;
-        let dp     = dst.as_mut_ptr();
-        let sp     = src.as_ptr();
-        let vs     = _mm256_set1_ps(s);
+        let dp = dst.as_mut_ptr();
+        let sp = src.as_ptr();
+        let vs = _mm256_set1_ps(s);
         for i in 0..chunks {
             let va = _mm256_loadu_ps(sp.add(i * 8));
             _mm256_storeu_ps(dp.add(i * 8), _mm256_mul_ps(va, vs));
@@ -176,12 +176,12 @@ mod x86 {
     /// Requires AVX2 + FMA.
     #[target_feature(enable = "avx2,fma")]
     pub(super) unsafe fn fma_into(dst: &mut [f32], a: &[f32], b: &[f32], c: &[f32]) {
-        let n      = dst.len();
+        let n = dst.len();
         let chunks = n / 8;
-        let dp     = dst.as_mut_ptr();
-        let ap     = a.as_ptr();
-        let bp     = b.as_ptr();
-        let cp     = c.as_ptr();
+        let dp = dst.as_mut_ptr();
+        let ap = a.as_ptr();
+        let bp = b.as_ptr();
+        let cp = c.as_ptr();
         for i in 0..chunks {
             let va = _mm256_loadu_ps(ap.add(i * 8));
             let vb = _mm256_loadu_ps(bp.add(i * 8));
@@ -205,9 +205,9 @@ mod neon {
     /// Requires NEON (always available on aarch64).
     #[target_feature(enable = "neon")]
     pub(super) unsafe fn hsum(a: &[f32]) -> f32 {
-        let n      = a.len();
+        let n = a.len();
         let chunks = n / 4;
-        let p      = a.as_ptr();
+        let p = a.as_ptr();
         let mut acc = vdupq_n_f32(0.0);
         for i in 0..chunks {
             acc = vaddq_f32(acc, vld1q_f32(p.add(i * 4)));
@@ -219,10 +219,10 @@ mod neon {
     /// Requires NEON.
     #[target_feature(enable = "neon")]
     pub(super) unsafe fn dot(a: &[f32], b: &[f32]) -> f32 {
-        let n      = a.len();
+        let n = a.len();
         let chunks = n / 4;
-        let ap     = a.as_ptr();
-        let bp     = b.as_ptr();
+        let ap = a.as_ptr();
+        let bp = b.as_ptr();
         let mut acc = vdupq_n_f32(0.0);
         for i in 0..chunks {
             let va = vld1q_f32(ap.add(i * 4));
@@ -237,13 +237,16 @@ mod neon {
     /// Requires NEON.
     #[target_feature(enable = "neon")]
     pub(super) unsafe fn add_into(dst: &mut [f32], a: &[f32], b: &[f32]) {
-        let n      = dst.len();
+        let n = dst.len();
         let chunks = n / 4;
-        let dp     = dst.as_mut_ptr();
-        let ap     = a.as_ptr();
-        let bp     = b.as_ptr();
+        let dp = dst.as_mut_ptr();
+        let ap = a.as_ptr();
+        let bp = b.as_ptr();
         for i in 0..chunks {
-            vst1q_f32(dp.add(i * 4), vaddq_f32(vld1q_f32(ap.add(i * 4)), vld1q_f32(bp.add(i * 4))));
+            vst1q_f32(
+                dp.add(i * 4),
+                vaddq_f32(vld1q_f32(ap.add(i * 4)), vld1q_f32(bp.add(i * 4))),
+            );
         }
         for i in (chunks * 4)..n {
             dst[i] = a[i] + b[i];
@@ -254,13 +257,16 @@ mod neon {
     /// Requires NEON.
     #[target_feature(enable = "neon")]
     pub(super) unsafe fn mul_into(dst: &mut [f32], a: &[f32], b: &[f32]) {
-        let n      = dst.len();
+        let n = dst.len();
         let chunks = n / 4;
-        let dp     = dst.as_mut_ptr();
-        let ap     = a.as_ptr();
-        let bp     = b.as_ptr();
+        let dp = dst.as_mut_ptr();
+        let ap = a.as_ptr();
+        let bp = b.as_ptr();
         for i in 0..chunks {
-            vst1q_f32(dp.add(i * 4), vmulq_f32(vld1q_f32(ap.add(i * 4)), vld1q_f32(bp.add(i * 4))));
+            vst1q_f32(
+                dp.add(i * 4),
+                vmulq_f32(vld1q_f32(ap.add(i * 4)), vld1q_f32(bp.add(i * 4))),
+            );
         }
         for i in (chunks * 4)..n {
             dst[i] = a[i] * b[i];
@@ -271,11 +277,11 @@ mod neon {
     /// Requires NEON.
     #[target_feature(enable = "neon")]
     pub(super) unsafe fn scale_into(dst: &mut [f32], src: &[f32], s: f32) {
-        let n      = dst.len();
+        let n = dst.len();
         let chunks = n / 4;
-        let dp     = dst.as_mut_ptr();
-        let sp     = src.as_ptr();
-        let vs     = vdupq_n_f32(s);
+        let dp = dst.as_mut_ptr();
+        let sp = src.as_ptr();
+        let vs = vdupq_n_f32(s);
         for i in 0..chunks {
             vst1q_f32(dp.add(i * 4), vmulq_f32(vld1q_f32(sp.add(i * 4)), vs));
         }
@@ -288,12 +294,12 @@ mod neon {
     /// Requires NEON.
     #[target_feature(enable = "neon")]
     pub(super) unsafe fn fma_into(dst: &mut [f32], a: &[f32], b: &[f32], c: &[f32]) {
-        let n      = dst.len();
+        let n = dst.len();
         let chunks = n / 4;
-        let dp     = dst.as_mut_ptr();
-        let ap     = a.as_ptr();
-        let bp     = b.as_ptr();
-        let cp     = c.as_ptr();
+        let dp = dst.as_mut_ptr();
+        let ap = a.as_ptr();
+        let bp = b.as_ptr();
+        let cp = c.as_ptr();
         for i in 0..chunks {
             let va = vld1q_f32(ap.add(i * 4));
             let vb = vld1q_f32(bp.add(i * 4));
@@ -328,7 +334,9 @@ fn dispatch_hsum(a: &[f32]) -> f32 {
 }
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
 #[inline]
-fn dispatch_hsum(a: &[f32]) -> f32 { hsum_scalar(a) }
+fn dispatch_hsum(a: &[f32]) -> f32 {
+    hsum_scalar(a)
+}
 
 // --- dot ---
 #[cfg(target_arch = "x86_64")]
@@ -349,7 +357,9 @@ fn dispatch_dot(a: &[f32], b: &[f32]) -> f32 {
 }
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
 #[inline]
-fn dispatch_dot(a: &[f32], b: &[f32]) -> f32 { dot_scalar(a, b) }
+fn dispatch_dot(a: &[f32], b: &[f32]) -> f32 {
+    dot_scalar(a, b)
+}
 
 // --- add_into ---
 #[cfg(target_arch = "x86_64")]
@@ -369,7 +379,9 @@ fn dispatch_add_into(dst: &mut [f32], a: &[f32], b: &[f32]) {
 }
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
 #[inline]
-fn dispatch_add_into(dst: &mut [f32], a: &[f32], b: &[f32]) { add_into_scalar(dst, a, b) }
+fn dispatch_add_into(dst: &mut [f32], a: &[f32], b: &[f32]) {
+    add_into_scalar(dst, a, b)
+}
 
 // --- mul_into ---
 #[cfg(target_arch = "x86_64")]
@@ -388,7 +400,9 @@ fn dispatch_mul_into(dst: &mut [f32], a: &[f32], b: &[f32]) {
 }
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
 #[inline]
-fn dispatch_mul_into(dst: &mut [f32], a: &[f32], b: &[f32]) { mul_into_scalar(dst, a, b) }
+fn dispatch_mul_into(dst: &mut [f32], a: &[f32], b: &[f32]) {
+    mul_into_scalar(dst, a, b)
+}
 
 // --- scale_into ---
 #[cfg(target_arch = "x86_64")]
@@ -407,7 +421,9 @@ fn dispatch_scale_into(dst: &mut [f32], src: &[f32], s: f32) {
 }
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
 #[inline]
-fn dispatch_scale_into(dst: &mut [f32], src: &[f32], s: f32) { scale_into_scalar(dst, src, s) }
+fn dispatch_scale_into(dst: &mut [f32], src: &[f32], s: f32) {
+    scale_into_scalar(dst, src, s)
+}
 
 // --- fma_into ---
 #[cfg(target_arch = "x86_64")]
@@ -426,7 +442,9 @@ fn dispatch_fma_into(dst: &mut [f32], a: &[f32], b: &[f32], c: &[f32]) {
 }
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
 #[inline]
-fn dispatch_fma_into(dst: &mut [f32], a: &[f32], b: &[f32], c: &[f32]) { fma_into_scalar(dst, a, b, c) }
+fn dispatch_fma_into(dst: &mut [f32], a: &[f32], b: &[f32], c: &[f32]) {
+    fma_into_scalar(dst, a, b, c)
+}
 
 // ── public safe API ───────────────────────────────────────────────────────
 
@@ -486,7 +504,9 @@ mod tests {
     use super::*;
 
     const TOL: f32 = 1e-5;
-    fn close(a: f32, b: f32) -> bool { (a - b).abs() < TOL }
+    fn close(a: f32, b: f32) -> bool {
+        (a - b).abs() < TOL
+    }
     fn close_slice(a: &[f32], b: &[f32]) -> bool {
         a.len() == b.len() && a.iter().zip(b).all(|(x, y)| close(*x, *y))
     }
@@ -528,11 +548,13 @@ mod tests {
         // for simpler cases.
         let a: Vec<f32> = (0..100).map(|i| i as f32 * 0.1).collect();
         let b: Vec<f32> = (0..100).map(|i| (100 - i) as f32 * 0.1).collect();
-        let simd_result   = dot(&a, &b);
+        let simd_result = dot(&a, &b);
         let scalar_result = dot_scalar(&a, &b);
         let rel_err = (simd_result - scalar_result).abs() / scalar_result.abs().max(1e-10);
-        assert!(rel_err < 1e-4,
-            "rel_err {rel_err:.2e} too large (simd={simd_result}, scalar={scalar_result})");
+        assert!(
+            rel_err < 1e-4,
+            "rel_err {rel_err:.2e} too large (simd={simd_result}, scalar={scalar_result})"
+        );
     }
 
     #[test]
@@ -549,7 +571,7 @@ mod tests {
     fn test_add_into_matches_scalar() {
         let a: Vec<f32> = (0..25).map(|i| i as f32).collect();
         let b: Vec<f32> = (0..25).map(|i| (25 - i) as f32).collect();
-        let mut dst_simd   = vec![0.0_f32; 25];
+        let mut dst_simd = vec![0.0_f32; 25];
         let mut dst_scalar = vec![0.0_f32; 25];
         add_into(&mut dst_simd, &a, &b);
         add_into_scalar(&mut dst_scalar, &a, &b);
@@ -562,7 +584,7 @@ mod tests {
     fn test_mul_into_matches_scalar() {
         let a: Vec<f32> = (1..=17).map(|i| i as f32).collect();
         let b: Vec<f32> = (1..=17).map(|i| 1.0 / i as f32).collect();
-        let mut dst_simd   = vec![0.0_f32; 16];
+        let mut dst_simd = vec![0.0_f32; 16];
         let mut dst_scalar = vec![0.0_f32; 16];
         mul_into(&mut dst_simd, &a[..16], &b[..16]);
         mul_into_scalar(&mut dst_scalar, &a[..16], &b[..16]);
@@ -575,7 +597,7 @@ mod tests {
     fn test_scale_into_matches_scalar() {
         let src: Vec<f32> = (0..13).map(|i| i as f32).collect();
         let s = 2.5_f32;
-        let mut dst_simd   = vec![0.0_f32; 13];
+        let mut dst_simd = vec![0.0_f32; 13];
         let mut dst_scalar = vec![0.0_f32; 13];
         scale_into(&mut dst_simd, &src, s);
         scale_into_scalar(&mut dst_scalar, &src, s);
@@ -589,7 +611,7 @@ mod tests {
         let a: Vec<f32> = (0..20).map(|i| i as f32).collect();
         let b: Vec<f32> = (0..20).map(|i| i as f32 * 0.5).collect();
         let c: Vec<f32> = (0..20).map(|i| -(i as f32)).collect();
-        let mut dst_simd   = vec![0.0_f32; 20];
+        let mut dst_simd = vec![0.0_f32; 20];
         let mut dst_scalar = vec![0.0_f32; 20];
         fma_into(&mut dst_simd, &a, &b, &c);
         fma_into_scalar(&mut dst_scalar, &a, &b, &c);

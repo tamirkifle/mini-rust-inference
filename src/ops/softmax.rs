@@ -33,8 +33,11 @@ use crate::tensor::{Result, Tensor, TensorError};
 /// Stable softmax over a single contiguous slice, written in-place.
 /// Returns early with all-zero output if the slice is empty.
 #[inline]
-fn softmax_row(row: &mut [f32]) { // CHANGED
-    if row.is_empty() { return; }
+fn softmax_row(row: &mut [f32]) {
+    // CHANGED
+    if row.is_empty() {
+        return;
+    }
 
     // 1. find max for numerical stability
     let max = row.iter().cloned().fold(f32::NEG_INFINITY, f32::max); // CHANGED
@@ -105,7 +108,7 @@ pub fn softmax_dim(x: &Tensor<f32>, dim: usize) -> Result<Tensor<f32>> {
         // outer = product of dims before `dim`
         // inner = product of dims after `dim`
         let outer: usize = dims[..dim].iter().product();
-        let n    = dims[dim];
+        let n = dims[dim];
         let inner: usize = dims[dim + 1..].iter().product();
 
         // For each (outer, inner) pair, collect the `n` values along `dim`,
@@ -136,7 +139,8 @@ pub fn softmax_dim(x: &Tensor<f32>, dim: usize) -> Result<Tensor<f32>> {
 /// # Errors
 ///
 /// * [`TensorError::InvalidShape`] if `x` is 0-D or non-contiguous.
-pub fn softmax_inplace(x: &mut Tensor<f32>) -> Result<()> { // CHANGED
+pub fn softmax_inplace(x: &mut Tensor<f32>) -> Result<()> {
+    // CHANGED
     if x.ndim() == 0 {
         return Err(TensorError::InvalidShape {
             reason: "softmax_inplace: input must be at least 1-D".to_string(),
@@ -162,17 +166,21 @@ pub fn softmax_inplace(x: &mut Tensor<f32>) -> Result<()> { // CHANGED
 mod tests {
     use super::*;
 
-    fn close(a: f32, b: f32, tol: f32) -> bool { (a - b).abs() < tol }
+    fn close(a: f32, b: f32, tol: f32) -> bool {
+        (a - b).abs() < tol
+    }
     fn close_slice(a: &[f32], b: &[f32], tol: f32) -> bool {
         a.len() == b.len() && a.iter().zip(b).all(|(x, y)| close(*x, *y, tol))
     }
-    fn sum(s: &[f32]) -> f32 { s.iter().sum() }
+    fn sum(s: &[f32]) -> f32 {
+        s.iter().sum()
+    }
 
     // ── output sums to 1 ─────────────────────────────────────────────────
 
     #[test]
     fn test_softmax_sums_to_one_1d() {
-        let x   = Tensor::from_vec(vec![1.0_f32, 2.0, 3.0, 4.0], vec![4]).unwrap();
+        let x = Tensor::from_vec(vec![1.0_f32, 2.0, 3.0, 4.0], vec![4]).unwrap();
         let out = softmax(&x).unwrap();
         assert!(close(sum(out.as_slice()), 1.0, 1e-6));
     }
@@ -181,7 +189,7 @@ mod tests {
     fn test_softmax_sums_to_one_each_row_2d() {
         // CHANGED: every row of a [3,4] tensor must sum to 1
         let data: Vec<f32> = (0..12).map(|i| i as f32).collect();
-        let x   = Tensor::from_vec(data, vec![3, 4]).unwrap();
+        let x = Tensor::from_vec(data, vec![3, 4]).unwrap();
         let out = softmax(&x).unwrap();
         for r in 0..3 {
             let row_sum = sum(&out.as_slice()[r * 4..(r + 1) * 4]);
@@ -194,7 +202,7 @@ mod tests {
     #[test]
     fn test_softmax_outputs_in_range() {
         let data: Vec<f32> = (-6..6).map(|i| i as f32).collect();
-        let x   = Tensor::from_vec(data, vec![12]).unwrap();
+        let x = Tensor::from_vec(data, vec![12]).unwrap();
         let out = softmax(&x).unwrap();
         for &v in out.as_slice() {
             assert!(v > 0.0 && v < 1.0, "output {v} not in (0,1)");
@@ -207,7 +215,7 @@ mod tests {
     fn test_softmax_uniform_logits() {
         // CHANGED: all-same input → all outputs = 1/n
         let n = 5_usize;
-        let x   = Tensor::full(vec![n], 2.0_f32);
+        let x = Tensor::full(vec![n], 2.0_f32);
         let out = softmax(&x).unwrap();
         let expected = 1.0 / n as f32;
         for &v in out.as_slice() {
@@ -221,10 +229,10 @@ mod tests {
     fn test_softmax_large_positive_no_nan() {
         // CHANGED: without the max-subtract trick these would all overflow
         let data = vec![1000.0_f32, 1001.0, 1002.0];
-        let x   = Tensor::from_vec(data, vec![3]).unwrap();
+        let x = Tensor::from_vec(data, vec![3]).unwrap();
         let out = softmax(&x).unwrap();
         for &v in out.as_slice() {
-            assert!(!v.is_nan(),      "NaN in softmax output");
+            assert!(!v.is_nan(), "NaN in softmax output");
             assert!(!v.is_infinite(), "Inf in softmax output");
         }
         assert!(close(sum(out.as_slice()), 1.0, 1e-6));
@@ -233,10 +241,10 @@ mod tests {
     #[test]
     fn test_softmax_large_negative_no_nan() {
         let data = vec![-1000.0_f32, -999.0, -998.0];
-        let x   = Tensor::from_vec(data, vec![3]).unwrap();
+        let x = Tensor::from_vec(data, vec![3]).unwrap();
         let out = softmax(&x).unwrap();
         for &v in out.as_slice() {
-            assert!(!v.is_nan(),      "NaN in softmax output");
+            assert!(!v.is_nan(), "NaN in softmax output");
             assert!(!v.is_infinite(), "Inf in softmax output");
         }
         assert!(close(sum(out.as_slice()), 1.0, 1e-5));
@@ -248,11 +256,14 @@ mod tests {
     fn test_softmax_pytorch_reference() {
         // CHANGED: torch.nn.functional.softmax(torch.tensor([1.,2.,3.,4.]), dim=0)
         // → [0.0321, 0.0871, 0.2369, 0.6439]
-        let x   = Tensor::from_vec(vec![1.0_f32, 2.0, 3.0, 4.0], vec![4]).unwrap();
+        let x = Tensor::from_vec(vec![1.0_f32, 2.0, 3.0, 4.0], vec![4]).unwrap();
         let out = softmax(&x).unwrap();
-        let expected = [0.032_058_604, 0.087_144_31, 0.236_882_8, 0.643_914_24];
-        assert!(close_slice(out.as_slice(), &expected, 1e-5),
-            "got {:?}", out.as_slice());
+        let expected = [0.032_058_604, 0.087_144_31, 0.236_882_8, 0.643_914_2];
+        assert!(
+            close_slice(out.as_slice(), &expected, 1e-5),
+            "got {:?}",
+            out.as_slice()
+        );
     }
 
     // ── one-hot: one logit >> others → prob ≈ 1 ──────────────────────────
@@ -261,9 +272,13 @@ mod tests {
     fn test_softmax_onehot_spike() {
         // CHANGED: a large spike should produce near-1 probability at that index
         let data = vec![0.0_f32, 0.0, 100.0, 0.0];
-        let x   = Tensor::from_vec(data, vec![4]).unwrap();
+        let x = Tensor::from_vec(data, vec![4]).unwrap();
         let out = softmax(&x).unwrap();
-        assert!(out.as_slice()[2] > 0.999, "spike prob = {}", out.as_slice()[2]);
+        assert!(
+            out.as_slice()[2] > 0.999,
+            "spike prob = {}",
+            out.as_slice()[2]
+        );
         assert!(close(sum(out.as_slice()), 1.0, 1e-6));
     }
 
@@ -271,7 +286,7 @@ mod tests {
 
     #[test]
     fn test_softmax_shape_preserved_3d() {
-        let x   = Tensor::from_vec((0..24).map(|i| i as f32).collect(), vec![2, 3, 4]).unwrap();
+        let x = Tensor::from_vec((0..24).map(|i| i as f32).collect(), vec![2, 3, 4]).unwrap();
         let out = softmax(&x).unwrap();
         assert_eq!(out.dims(), x.dims());
     }
@@ -281,9 +296,8 @@ mod tests {
     #[test]
     fn test_softmax_dim0_2d() {
         // CHANGED: softmax along dim=0 → each *column* sums to 1
-        let data = vec![1.0_f32, 2.0,
-                        3.0,     4.0];
-        let x   = Tensor::from_vec(data, vec![2, 2]).unwrap();
+        let data = vec![1.0_f32, 2.0, 3.0, 4.0];
+        let x = Tensor::from_vec(data, vec![2, 2]).unwrap();
         let out = softmax_dim(&x, 0).unwrap();
         assert_eq!(out.dims(), &[2, 2]);
         // col 0: softmax([1,3]), col 1: softmax([2,4])
@@ -307,16 +321,16 @@ mod tests {
     #[test]
     fn test_softmax_inplace_matches_allocating() {
         let data: Vec<f32> = (0..8).map(|i| i as f32).collect();
-        let x_alloc    = Tensor::from_vec(data.clone(), vec![2, 4]).unwrap();
-        let mut x_ip   = Tensor::from_vec(data, vec![2, 4]).unwrap();
-        let out_alloc  = softmax(&x_alloc).unwrap();
+        let x_alloc = Tensor::from_vec(data.clone(), vec![2, 4]).unwrap();
+        let mut x_ip = Tensor::from_vec(data, vec![2, 4]).unwrap();
+        let out_alloc = softmax(&x_alloc).unwrap();
         softmax_inplace(&mut x_ip).unwrap();
         assert!(close_slice(out_alloc.as_slice(), x_ip.as_slice(), 1e-7));
     }
 
     #[test]
     fn test_softmax_inplace_rejects_strided() {
-        let orig       = Tensor::from_vec(vec![1.0_f32; 4], vec![2, 2]).unwrap();
+        let orig = Tensor::from_vec(vec![1.0_f32; 4], vec![2, 2]).unwrap();
         let mut strided = orig.transpose(0, 1).unwrap();
         assert!(softmax_inplace(&mut strided).is_err());
     }
@@ -326,8 +340,8 @@ mod tests {
     #[test]
     fn test_softmax_non_contiguous_input() {
         let orig = Tensor::from_vec(vec![1.0_f32, 3.0, 2.0, 4.0], vec![2, 2]).unwrap();
-        let t    = orig.transpose(0, 1).unwrap(); // non-contiguous [2,2]
-        let out  = softmax(&t);
+        let t = orig.transpose(0, 1).unwrap(); // non-contiguous [2,2]
+        let out = softmax(&t);
         assert!(out.is_ok());
         // rows of transposed are [1,2] and [3,4]; each must sum to 1
         let s = out.unwrap();
@@ -342,6 +356,9 @@ mod tests {
     #[test]
     fn test_softmax_dim_out_of_range() {
         let x = Tensor::from_vec(vec![1.0_f32; 6], vec![2, 3]).unwrap();
-        assert!(matches!(softmax_dim(&x, 2), Err(TensorError::InvalidShape { .. })));
+        assert!(matches!(
+            softmax_dim(&x, 2),
+            Err(TensorError::InvalidShape { .. })
+        ));
     }
 }

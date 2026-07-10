@@ -156,7 +156,11 @@ impl MetadataValue {
     /// # Errors
     ///
     /// Returns an error if reading fails or nested arrays are encountered.
-    fn read_typed<R: Read>(reader: &mut R, value_type: GgufValueType, in_array: bool) -> Result<Self> {
+    fn read_typed<R: Read>(
+        reader: &mut R,
+        value_type: GgufValueType,
+        in_array: bool,
+    ) -> Result<Self> {
         match value_type {
             GgufValueType::Uint8 => Ok(Self::Uint8(read_u8(reader, "uint8 value")?)),
             GgufValueType::Int8 => Ok(Self::Int8(read_i8(reader, "int8 value")?)),
@@ -593,7 +597,7 @@ mod tests {
     #[test]
     fn test_read_uint32_value() {
         let mut data = Vec::new();
-        data.extend_from_slice(&4u32.to_le_bytes());  // Type: Uint32
+        data.extend_from_slice(&4u32.to_le_bytes()); // Type: Uint32
         data.extend_from_slice(&42u32.to_le_bytes()); // Value: 42
 
         let mut cursor = Cursor::new(data);
@@ -606,7 +610,7 @@ mod tests {
     #[test]
     fn test_read_string_value() {
         let mut data = Vec::new();
-        data.extend_from_slice(&8u32.to_le_bytes());  // Type: String
+        data.extend_from_slice(&8u32.to_le_bytes()); // Type: String
         write_string(&mut data, "llama");
 
         let mut cursor = Cursor::new(data);
@@ -619,8 +623,8 @@ mod tests {
     fn test_read_bool_values() {
         // Test true
         let mut data = Vec::new();
-        data.extend_from_slice(&7u32.to_le_bytes());  // Type: Bool
-        data.push(1);  // true
+        data.extend_from_slice(&7u32.to_le_bytes()); // Type: Bool
+        data.push(1); // true
 
         let mut cursor = Cursor::new(data);
         let value = MetadataValue::read(&mut cursor).unwrap();
@@ -629,7 +633,7 @@ mod tests {
         // Test false
         let mut data = Vec::new();
         data.extend_from_slice(&7u32.to_le_bytes());
-        data.push(0);  // false
+        data.push(0); // false
 
         let mut cursor = Cursor::new(data);
         let value = MetadataValue::read(&mut cursor).unwrap();
@@ -638,7 +642,7 @@ mod tests {
         // Test invalid
         let mut data = Vec::new();
         data.extend_from_slice(&7u32.to_le_bytes());
-        data.push(2);  // invalid
+        data.push(2); // invalid
 
         let mut cursor = Cursor::new(data);
         let result = MetadataValue::read(&mut cursor);
@@ -648,23 +652,23 @@ mod tests {
     #[test]
     fn test_read_float32_value() {
         let mut data = Vec::new();
-        data.extend_from_slice(&6u32.to_le_bytes());       // Type: Float32
-        data.extend_from_slice(&3.14f32.to_le_bytes());    // Value
+        data.extend_from_slice(&6u32.to_le_bytes()); // Type: Float32
+        data.extend_from_slice(&std::f32::consts::PI.to_le_bytes()); // Value
 
         let mut cursor = Cursor::new(data);
         let value = MetadataValue::read(&mut cursor).unwrap();
 
         let f = value.as_f32().unwrap();
-        assert!((f - 3.14).abs() < 1e-5);
+        assert!((f - std::f32::consts::PI).abs() < 1e-5);
     }
 
     #[test]
     fn test_read_u32_array() {
         let mut data = Vec::new();
-        data.extend_from_slice(&9u32.to_le_bytes());   // Type: Array
-        data.extend_from_slice(&4u32.to_le_bytes());   // Element type: Uint32
-        data.extend_from_slice(&3u64.to_le_bytes());   // Length: 3
-        data.extend_from_slice(&10u32.to_le_bytes());  // Elements
+        data.extend_from_slice(&9u32.to_le_bytes()); // Type: Array
+        data.extend_from_slice(&4u32.to_le_bytes()); // Element type: Uint32
+        data.extend_from_slice(&3u64.to_le_bytes()); // Length: 3
+        data.extend_from_slice(&10u32.to_le_bytes()); // Elements
         data.extend_from_slice(&20u32.to_le_bytes());
         data.extend_from_slice(&30u32.to_le_bytes());
 
@@ -677,9 +681,9 @@ mod tests {
     #[test]
     fn test_read_string_array() {
         let mut data = Vec::new();
-        data.extend_from_slice(&9u32.to_le_bytes());   // Type: Array
-        data.extend_from_slice(&8u32.to_le_bytes());   // Element type: String
-        data.extend_from_slice(&2u64.to_le_bytes());   // Length: 2
+        data.extend_from_slice(&9u32.to_le_bytes()); // Type: Array
+        data.extend_from_slice(&8u32.to_le_bytes()); // Element type: String
+        data.extend_from_slice(&2u64.to_le_bytes()); // Length: 2
         write_string(&mut data, "hello");
         write_string(&mut data, "world");
 
@@ -695,9 +699,9 @@ mod tests {
     #[test]
     fn test_nested_array_rejected() {
         let mut data = Vec::new();
-        data.extend_from_slice(&9u32.to_le_bytes());   // Type: Array
-        data.extend_from_slice(&9u32.to_le_bytes());   // Element type: Array (nested!)
-        data.extend_from_slice(&1u64.to_le_bytes());   // Length: 1
+        data.extend_from_slice(&9u32.to_le_bytes()); // Type: Array
+        data.extend_from_slice(&9u32.to_le_bytes()); // Element type: Array (nested!)
+        data.extend_from_slice(&1u64.to_le_bytes()); // Length: 1
 
         let mut cursor = Cursor::new(data);
         let result = MetadataValue::read(&mut cursor);
@@ -711,12 +715,12 @@ mod tests {
 
         // Entry 1: "general.architecture" = "llama" (string)
         write_string(&mut data, "general.architecture");
-        data.extend_from_slice(&8u32.to_le_bytes());  // Type: String
+        data.extend_from_slice(&8u32.to_le_bytes()); // Type: String
         write_string(&mut data, "llama");
 
         // Entry 2: "llama.block_count" = 32 (u32)
         write_string(&mut data, "llama.block_count");
-        data.extend_from_slice(&4u32.to_le_bytes());  // Type: Uint32
+        data.extend_from_slice(&4u32.to_le_bytes()); // Type: Uint32
         data.extend_from_slice(&32u32.to_le_bytes());
 
         let mut cursor = Cursor::new(data);

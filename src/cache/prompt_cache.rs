@@ -45,13 +45,13 @@ use crate::tensor::{Result, TensorError};
 #[derive(Debug, Clone)]
 pub struct KvSnapshot {
     /// Per-layer K data: `k_data[layer]` is a flat vec of `seq_len * kv_dim` f32.
-    k_data:   Vec<Vec<f32>>,
+    k_data: Vec<Vec<f32>>,
     /// Per-layer V data: same layout as `k_data`.
-    v_data:   Vec<Vec<f32>>,
+    v_data: Vec<Vec<f32>>,
     /// Number of token rows captured.
-    pub seq_len:  usize,
+    pub seq_len: usize,
     /// `n_kv_heads * head_dim`.
-    pub kv_dim:   usize,
+    pub kv_dim: usize,
     /// Number of transformer layers.
     pub n_layers: usize,
 }
@@ -72,7 +72,8 @@ impl KvSnapshot {
             return Err(TensorError::InvalidShape {
                 reason: format!(
                     "KvSnapshot::restore_into: kv_dim {} != cache.kv_dim {}",
-                    self.kv_dim, cache.kv_dim()
+                    self.kv_dim,
+                    cache.kv_dim()
                 ),
             });
         }
@@ -80,14 +81,15 @@ impl KvSnapshot {
             return Err(TensorError::InvalidShape {
                 reason: format!(
                     "KvSnapshot::restore_into: cache has {} layers < snapshot {}",
-                    cache.n_layers(), self.n_layers
+                    cache.n_layers(),
+                    self.n_layers
                 ),
             });
         }
         for layer in 0..self.n_layers {
             for pos in 0..self.seq_len {
                 let start = pos * self.kv_dim;
-                let end   = start + self.kv_dim;
+                let end = start + self.kv_dim;
                 cache.write_k(layer, pos, &self.k_data[layer][start..end])?;
                 cache.write_v(layer, pos, &self.v_data[layer][start..end])?;
             }
@@ -103,7 +105,7 @@ pub struct PrefixMatch {
     /// Number of leading tokens whose K/V data is cached.
     pub matched_len: usize,
     /// The cached K/V state for those tokens.
-    pub snapshot:    KvSnapshot,
+    pub snapshot: KvSnapshot,
 }
 
 // ── PromptCache ───────────────────────────────────────────────────────────────
@@ -113,19 +115,19 @@ pub struct PrefixMatch {
 /// Stores up to `capacity` entries.  When full, the least-recently-used entry
 /// is evicted on the next `store` call.
 pub struct PromptCache {
-    entries:   Vec<CacheEntry>,
-    capacity:  usize,
+    entries: Vec<CacheEntry>,
+    capacity: usize,
     /// Monotonically increasing clock for LRU tracking.
-    clock:     u64,
+    clock: u64,
     /// Dimensions every snapshot must match.
-    n_layers:  usize,
-    kv_dim:    usize,
+    n_layers: usize,
+    kv_dim: usize,
 }
 
 struct CacheEntry {
-    tokens:       Vec<u32>,
-    snapshot:     KvSnapshot,
-    last_used:    u64,
+    tokens: Vec<u32>,
+    snapshot: KvSnapshot,
+    last_used: u64,
 }
 
 impl PromptCache {
@@ -145,11 +147,11 @@ impl PromptCache {
     pub fn new(capacity: usize, n_layers: usize, n_kv_heads: usize, head_dim: usize) -> Self {
         assert!(capacity > 0, "PromptCache: capacity must be ≥ 1");
         Self {
-            entries:  Vec::with_capacity(capacity),
+            entries: Vec::with_capacity(capacity),
             capacity,
-            clock:    0,
+            clock: 0,
             n_layers,
-            kv_dim:   n_kv_heads * head_dim,
+            kv_dim: n_kv_heads * head_dim,
         }
     }
 
@@ -164,11 +166,13 @@ impl PromptCache {
     ///
     /// Returns `None` if no prefix matches at all (not even length 1).
     pub fn lookup(&mut self, tokens: &[u32]) -> Option<PrefixMatch> {
-        let mut best_idx    = None::<usize>;
-        let mut best_len    = 0_usize;
+        let mut best_idx = None::<usize>;
+        let mut best_len = 0_usize;
 
         for (idx, entry) in self.entries.iter().enumerate() {
-            if entry.tokens.is_empty() { continue; }
+            if entry.tokens.is_empty() {
+                continue;
+            }
             // Compute common prefix length between entry.tokens and tokens.
             let match_len = common_prefix_len(&entry.tokens, tokens);
             // Only count a hit if the *entire* stored prefix matched.
@@ -184,7 +188,7 @@ impl PromptCache {
         self.entries[idx].last_used = self.clock;
         Some(PrefixMatch {
             matched_len: best_len,
-            snapshot:    self.entries[idx].snapshot.clone(),
+            snapshot: self.entries[idx].snapshot.clone(),
         })
     }
 
@@ -201,12 +205,7 @@ impl PromptCache {
     ///
     /// [`TensorError::InvalidShape`] if `prefix_len > cache.max_seq_len()`,
     /// `cache.kv_dim() != self.kv_dim`, or `prefix_len > tokens.len()`.
-    pub fn store(
-        &mut self,
-        tokens:     &[u32],
-        cache:      &KvCache,
-        prefix_len: usize,
-    ) -> Result<()> {
+    pub fn store(&mut self, tokens: &[u32], cache: &KvCache, prefix_len: usize) -> Result<()> {
         if prefix_len > tokens.len() {
             return Err(TensorError::InvalidShape {
                 reason: format!(
@@ -219,7 +218,8 @@ impl PromptCache {
             return Err(TensorError::InvalidShape {
                 reason: format!(
                     "PromptCache::store: cache.kv_dim {} != expected {}",
-                    cache.kv_dim(), self.kv_dim
+                    cache.kv_dim(),
+                    self.kv_dim
                 ),
             });
         }
@@ -233,21 +233,22 @@ impl PromptCache {
         }
 
         let prefix_tokens = tokens[..prefix_len].to_vec();
-        let snapshot      = self.snapshot_from_cache(cache, prefix_len)?;
+        let snapshot = self.snapshot_from_cache(cache, prefix_len)?;
 
         // Check for an existing entry with the same prefix — update in-place.
-        if let Some(entry) = self.entries.iter_mut()
-            .find(|e| e.tokens == prefix_tokens)
-        {
+        if let Some(entry) = self.entries.iter_mut().find(|e| e.tokens == prefix_tokens) {
             self.clock += 1;
-            entry.snapshot  = snapshot;
+            entry.snapshot = snapshot;
             entry.last_used = self.clock;
             return Ok(());
         }
 
         // Evict LRU entry if at capacity.
         if self.entries.len() >= self.capacity {
-            let lru_idx = self.entries.iter().enumerate()
+            let lru_idx = self
+                .entries
+                .iter()
+                .enumerate()
                 .min_by_key(|(_, e)| e.last_used)
                 .map(|(i, _)| i)
                 .unwrap(); // safe: capacity ≥ 1, entries non-empty
@@ -256,7 +257,7 @@ impl PromptCache {
 
         self.clock += 1;
         self.entries.push(CacheEntry {
-            tokens:    prefix_tokens,
+            tokens: prefix_tokens,
             snapshot,
             last_used: self.clock,
         });
@@ -267,18 +268,26 @@ impl PromptCache {
 
     /// Number of snapshots currently stored.
     #[must_use]
-    pub fn len(&self) -> usize { self.entries.len() }
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
 
     /// `true` if no snapshots are stored.
     #[must_use]
-    pub fn is_empty(&self) -> bool { self.entries.is_empty() }
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
 
     /// Maximum number of entries before eviction occurs.
     #[must_use]
-    pub fn capacity(&self) -> usize { self.capacity }
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
 
     /// Remove all stored entries.
-    pub fn clear(&mut self) { self.entries.clear(); }
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
 
     // ── private helpers ───────────────────────────────────────────────────
 
@@ -302,8 +311,8 @@ impl PromptCache {
         Ok(KvSnapshot {
             k_data,
             v_data,
-            seq_len:  prefix_len,
-            kv_dim:   self.kv_dim,
+            seq_len: prefix_len,
+            kv_dim: self.kv_dim,
             n_layers: self.n_layers,
         })
     }
@@ -324,7 +333,12 @@ mod tests {
     use crate::cache::KvCache;
 
     /// Build a KvCache with deterministic synthetic data written for `seq_len` positions.
-    fn filled_cache(n_layers: usize, n_kv_heads: usize, head_dim: usize, seq_len: usize) -> KvCache {
+    fn filled_cache(
+        n_layers: usize,
+        n_kv_heads: usize,
+        head_dim: usize,
+        seq_len: usize,
+    ) -> KvCache {
         let mut cache = KvCache::new(n_layers, 128, n_kv_heads, head_dim);
         let kv_dim = n_kv_heads * head_dim;
         for layer in 0..n_layers {
@@ -359,7 +373,7 @@ mod tests {
         let n_layers = 2_usize;
         let n_kv_heads = 1_usize;
         let head_dim = 4_usize;
-        let seq_len  = 4_usize;
+        let seq_len = 4_usize;
 
         let cache = filled_cache(n_layers, n_kv_heads, head_dim, seq_len);
         let mut pc = make_prompt_cache(4, n_layers, n_kv_heads, head_dim);
@@ -377,7 +391,7 @@ mod tests {
         let n_layers = 1_usize;
         let n_kv_heads = 1_usize;
         let head_dim = 4_usize;
-        let seq_len  = 4_usize;
+        let seq_len = 4_usize;
 
         let cache = filled_cache(n_layers, n_kv_heads, head_dim, seq_len);
         let mut pc = make_prompt_cache(4, n_layers, n_kv_heads, head_dim);
@@ -418,13 +432,13 @@ mod tests {
 
     #[test]
     fn test_snapshot_restore_matches_original() {
-        let n_layers   = 2_usize;
+        let n_layers = 2_usize;
         let n_kv_heads = 1_usize;
-        let head_dim   = 4_usize;
-        let seq_len    = 5_usize;
+        let head_dim = 4_usize;
+        let seq_len = 5_usize;
 
         let src_cache = filled_cache(n_layers, n_kv_heads, head_dim, seq_len);
-        let mut pc    = make_prompt_cache(4, n_layers, n_kv_heads, head_dim);
+        let mut pc = make_prompt_cache(4, n_layers, n_kv_heads, head_dim);
 
         let key: Vec<u32> = vec![0u32; seq_len];
         pc.store(&key, &src_cache, seq_len).unwrap();
@@ -439,14 +453,18 @@ mod tests {
             let src_k = src_cache.read_k(layer, seq_len).unwrap();
             let dst_k = dst_cache.read_k(layer, seq_len).unwrap();
             for (i, (&a, &b)) in src_k.as_slice().iter().zip(dst_k.as_slice()).enumerate() {
-                assert!((a - b).abs() < 1e-7,
-                    "layer {layer} K[{i}] mismatch: src={a} dst={b}");
+                assert!(
+                    (a - b).abs() < 1e-7,
+                    "layer {layer} K[{i}] mismatch: src={a} dst={b}"
+                );
             }
             let src_v = src_cache.read_v(layer, seq_len).unwrap();
             let dst_v = dst_cache.read_v(layer, seq_len).unwrap();
             for (i, (&a, &b)) in src_v.as_slice().iter().zip(dst_v.as_slice()).enumerate() {
-                assert!((a - b).abs() < 1e-7,
-                    "layer {layer} V[{i}] mismatch: src={a} dst={b}");
+                assert!(
+                    (a - b).abs() < 1e-7,
+                    "layer {layer} V[{i}] mismatch: src={a} dst={b}"
+                );
             }
         }
     }
@@ -455,13 +473,15 @@ mod tests {
 
     #[test]
     fn test_lookup_returns_longest_matching_prefix() {
-        let n_layers = 1_usize; let kv_heads = 1_usize; let hd = 4_usize;
+        let n_layers = 1_usize;
+        let kv_heads = 1_usize;
+        let hd = 4_usize;
         let cache_short = filled_cache(n_layers, kv_heads, hd, 3);
-        let cache_long  = filled_cache(n_layers, kv_heads, hd, 5);
+        let cache_long = filled_cache(n_layers, kv_heads, hd, 5);
         let mut pc = make_prompt_cache(4, n_layers, kv_heads, hd);
 
-        pc.store(&[1u32, 2, 3],       &cache_short, 3).unwrap();
-        pc.store(&[1u32, 2, 3, 4, 5], &cache_long,  5).unwrap();
+        pc.store(&[1u32, 2, 3], &cache_short, 3).unwrap();
+        pc.store(&[1u32, 2, 3, 4, 5], &cache_long, 5).unwrap();
 
         // Query starts with [1,2,3,4,5,...] — both entries match but longer wins
         let hit = pc.lookup(&[1u32, 2, 3, 4, 5, 6]).unwrap();
@@ -472,7 +492,9 @@ mod tests {
 
     #[test]
     fn test_lru_eviction_removes_oldest() {
-        let n_layers = 1_usize; let kv_heads = 1_usize; let hd = 4_usize;
+        let n_layers = 1_usize;
+        let kv_heads = 1_usize;
+        let hd = 4_usize;
         let cache = filled_cache(n_layers, kv_heads, hd, 2);
         let mut pc = make_prompt_cache(2, n_layers, kv_heads, hd); // capacity=2
 
@@ -482,21 +504,29 @@ mod tests {
         assert_eq!(pc.len(), 2);
 
         // Access entry A to make it most-recently used
-        let _ = pc.lookup(&[1u32, 2]);  // clock=3, A.last_used=3
+        let _ = pc.lookup(&[1u32, 2]); // clock=3, A.last_used=3
 
         // Store a third entry — capacity=2, should evict B (last_used=2)
         pc.store(&[5u32, 6], &cache, 2).unwrap(); // clock=4
         assert_eq!(pc.len(), 2);
 
         // A should still be present
-        assert!(pc.lookup(&[1u32, 2]).is_some(), "entry A should survive LRU eviction");
+        assert!(
+            pc.lookup(&[1u32, 2]).is_some(),
+            "entry A should survive LRU eviction"
+        );
         // B should be gone
-        assert!(pc.lookup(&[3u32, 4]).is_none(), "entry B should have been evicted");
+        assert!(
+            pc.lookup(&[3u32, 4]).is_none(),
+            "entry B should have been evicted"
+        );
     }
 
     #[test]
     fn test_capacity_1_always_evicts_on_new_store() {
-        let n_layers = 1_usize; let kv_heads = 1_usize; let hd = 4_usize;
+        let n_layers = 1_usize;
+        let kv_heads = 1_usize;
+        let hd = 4_usize;
         let cache = filled_cache(n_layers, kv_heads, hd, 2);
         let mut pc = make_prompt_cache(1, n_layers, kv_heads, hd);
 
@@ -514,14 +544,16 @@ mod tests {
 
     #[test]
     fn test_store_same_prefix_updates_in_place() {
-        let n_layers = 1_usize; let kv_heads = 1_usize; let hd = 4_usize;
+        let n_layers = 1_usize;
+        let kv_heads = 1_usize;
+        let hd = 4_usize;
         let cache = filled_cache(n_layers, kv_heads, hd, 3);
         let mut pc = make_prompt_cache(4, n_layers, kv_heads, hd);
         let tokens = &[1u32, 2, 3];
 
         pc.store(tokens, &cache, 3).unwrap();
         pc.store(tokens, &cache, 3).unwrap(); // same prefix again
-        // Should not grow beyond 1 entry
+                                              // Should not grow beyond 1 entry
         assert_eq!(pc.len(), 1);
     }
 
@@ -529,7 +561,9 @@ mod tests {
 
     #[test]
     fn test_clear_removes_all_entries() {
-        let n_layers = 1_usize; let kv_heads = 1_usize; let hd = 4_usize;
+        let n_layers = 1_usize;
+        let kv_heads = 1_usize;
+        let hd = 4_usize;
         let cache = filled_cache(n_layers, kv_heads, hd, 3);
         let mut pc = make_prompt_cache(4, n_layers, kv_heads, hd);
         pc.store(&[1u32, 2, 3], &cache, 3).unwrap();
@@ -565,7 +599,9 @@ mod tests {
 
     #[test]
     fn test_restore_kv_dim_mismatch_rejected() {
-        let n_layers = 1_usize; let kv_heads = 1_usize; let hd = 4_usize;
+        let n_layers = 1_usize;
+        let kv_heads = 1_usize;
+        let hd = 4_usize;
         let cache = filled_cache(n_layers, kv_heads, hd, 3);
         let mut pc = make_prompt_cache(4, n_layers, kv_heads, hd);
         pc.store(&[1u32, 2, 3], &cache, 3).unwrap();

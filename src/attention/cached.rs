@@ -18,9 +18,9 @@
 //! `cached_attention_prefill` with `start_pos = 0` produces the same output as
 //! calling `grouped_query_attention_causal` directly on the same Q/K/V.
 
+use crate::attention::gqa::grouped_query_attention_causal_with_offset;
 use crate::cache::KvCache;
 use crate::tensor::{Result, Tensor, TensorError};
-use crate::attention::gqa::grouped_query_attention_causal_with_offset;
 
 // ── prefill ───────────────────────────────────────────────────────────────────
 
@@ -50,13 +50,13 @@ use crate::attention::gqa::grouped_query_attention_causal_with_offset;
 /// out of range, or positions overflow `max_seq_len`.
 #[must_use = "returns the prefill attention output"]
 pub fn cached_attention_prefill(
-    cache:      &mut KvCache,
-    layer:      usize,
-    start_pos:  usize,
-    q:          &Tensor<f32>,
-    k:          &Tensor<f32>,
-    v:          &Tensor<f32>,
-    n_heads:    usize,
+    cache: &mut KvCache,
+    layer: usize,
+    start_pos: usize,
+    q: &Tensor<f32>,
+    k: &Tensor<f32>,
+    v: &Tensor<f32>,
+    n_heads: usize,
     n_kv_heads: usize,
 ) -> Result<Tensor<f32>> {
     if q.ndim() != 2 {
@@ -65,7 +65,7 @@ pub fn cached_attention_prefill(
         });
     }
     let seq_len = q.dims()[0];
-    let kv_dim  = cache.kv_dim();
+    let kv_dim = cache.kv_dim();
 
     // Ensure K and V are contiguous before slicing.
     let k_cont;
@@ -139,13 +139,13 @@ pub fn cached_attention_prefill(
 /// or `layer` is out of range.
 #[must_use = "returns the decode attention output"]
 pub fn cached_attention_decode(
-    cache:      &mut KvCache,
-    layer:      usize,
-    pos:        usize,
-    q:          &Tensor<f32>,
-    k:          &Tensor<f32>,
-    v:          &Tensor<f32>,
-    n_heads:    usize,
+    cache: &mut KvCache,
+    layer: usize,
+    pos: usize,
+    q: &Tensor<f32>,
+    k: &Tensor<f32>,
+    v: &Tensor<f32>,
+    n_heads: usize,
     n_kv_heads: usize,
 ) -> Result<Tensor<f32>> {
     if q.ndim() != 2 || q.dims()[0] != 1 {
@@ -179,8 +179,8 @@ pub fn cached_attention_decode(
 
     // Read back full context: positions 0..=pos → [pos+1, kv_dim].
     let seq_len = pos + 1;
-    let k_full  = cache.read_k(layer, seq_len)?;
-    let v_full  = cache.read_v(layer, seq_len)?;
+    let k_full = cache.read_k(layer, seq_len)?;
+    let v_full = cache.read_v(layer, seq_len)?;
 
     // GQA with offset: query is at absolute position `pos`, so it may attend
     // to all keys at positions 0..=pos (causal_mask_with_offset allows this).
@@ -192,10 +192,12 @@ pub fn cached_attention_decode(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cache::KvCache;
     use crate::attention::gqa::grouped_query_attention_causal;
+    use crate::cache::KvCache;
 
-    fn close(a: f32, b: f32, tol: f32) -> bool { (a - b).abs() < tol }
+    fn close(a: f32, b: f32, tol: f32) -> bool {
+        (a - b).abs() < tol
+    }
     fn close_slice(a: &[f32], b: &[f32], tol: f32) -> bool {
         a.len() == b.len() && a.iter().zip(b).all(|(x, y)| close(*x, *y, tol))
     }
@@ -213,12 +215,9 @@ mod tests {
         let n_heads_total = n_heads * head_dim;
         let kv_total = n_kv_heads * head_dim;
 
-        let q_data: Vec<f32> = (0..seq * n_heads_total)
-            .map(|i| i as f32 * 0.1).collect();
-        let k_data: Vec<f32> = (0..seq * kv_total)
-            .map(|i| i as f32 * 0.05).collect();
-        let v_data: Vec<f32> = (0..seq * kv_total)
-            .map(|i| (i as f32).sin()).collect();
+        let q_data: Vec<f32> = (0..seq * n_heads_total).map(|i| i as f32 * 0.1).collect();
+        let k_data: Vec<f32> = (0..seq * kv_total).map(|i| i as f32 * 0.05).collect();
+        let v_data: Vec<f32> = (0..seq * kv_total).map(|i| (i as f32).sin()).collect();
 
         let q = Tensor::from_vec(q_data.clone(), vec![seq, n_heads_total]).unwrap();
         let k = Tensor::from_vec(k_data.clone(), vec![seq, kv_total]).unwrap();
@@ -227,13 +226,14 @@ mod tests {
         let uncached = grouped_query_attention_causal(&q, &k, &v, n_heads, n_kv_heads).unwrap();
 
         let mut cache = KvCache::new(1, 64, n_kv_heads, head_dim);
-        let cached = cached_attention_prefill(&mut cache, 0, 0, &q, &k, &v, n_heads, n_kv_heads)
-            .unwrap();
+        let cached =
+            cached_attention_prefill(&mut cache, 0, 0, &q, &k, &v, n_heads, n_kv_heads).unwrap();
 
         assert!(
             close_slice(cached.as_slice(), uncached.as_slice(), 1e-5),
             "prefill output differs from uncached GQA:\n cached={:?}\nuncached={:?}",
-            &cached.as_slice()[..8], &uncached.as_slice()[..8]
+            &cached.as_slice()[..8],
+            &uncached.as_slice()[..8]
         );
     }
 
@@ -243,16 +243,25 @@ mod tests {
         let n_kv_heads = 2_usize;
         let head_dim = 8_usize;
         let seq = 5_usize;
-        let q = Tensor::from_vec(vec![0.1_f32; seq * n_heads * head_dim],
-            vec![seq, n_heads * head_dim]).unwrap();
-        let k = Tensor::from_vec(vec![0.2_f32; seq * n_kv_heads * head_dim],
-            vec![seq, n_kv_heads * head_dim]).unwrap();
-        let v = Tensor::from_vec(vec![0.3_f32; seq * n_kv_heads * head_dim],
-            vec![seq, n_kv_heads * head_dim]).unwrap();
+        let q = Tensor::from_vec(
+            vec![0.1_f32; seq * n_heads * head_dim],
+            vec![seq, n_heads * head_dim],
+        )
+        .unwrap();
+        let k = Tensor::from_vec(
+            vec![0.2_f32; seq * n_kv_heads * head_dim],
+            vec![seq, n_kv_heads * head_dim],
+        )
+        .unwrap();
+        let v = Tensor::from_vec(
+            vec![0.3_f32; seq * n_kv_heads * head_dim],
+            vec![seq, n_kv_heads * head_dim],
+        )
+        .unwrap();
 
         let mut cache = KvCache::new(1, 128, n_kv_heads, head_dim);
-        let out = cached_attention_prefill(&mut cache, 0, 0, &q, &k, &v, n_heads, n_kv_heads)
-            .unwrap();
+        let out =
+            cached_attention_prefill(&mut cache, 0, 0, &q, &k, &v, n_heads, n_kv_heads).unwrap();
         // Output should be [seq, n_heads * head_dim]
         assert_eq!(out.dims(), &[seq, n_heads * head_dim]);
     }
@@ -266,14 +275,17 @@ mod tests {
         let head_dim = 4_usize;
         let kv_dim = n_kv_heads * head_dim;
 
-        let q = Tensor::from_vec(vec![0.5_f32; n_heads * head_dim],
-            vec![1, n_heads * head_dim]).unwrap();
+        let q = Tensor::from_vec(
+            vec![0.5_f32; n_heads * head_dim],
+            vec![1, n_heads * head_dim],
+        )
+        .unwrap();
         let k = Tensor::from_vec(vec![0.3_f32; kv_dim], vec![1, kv_dim]).unwrap();
         let v = Tensor::from_vec(vec![0.7_f32; kv_dim], vec![1, kv_dim]).unwrap();
 
         let mut cache = KvCache::new(1, 64, n_kv_heads, head_dim);
-        let out = cached_attention_decode(&mut cache, 0, 0, &q, &k, &v, n_heads, n_kv_heads)
-            .unwrap();
+        let out =
+            cached_attention_decode(&mut cache, 0, 0, &q, &k, &v, n_heads, n_kv_heads).unwrap();
         assert_eq!(out.dims(), &[1, n_heads * head_dim]);
     }
 
@@ -297,10 +309,10 @@ mod tests {
         let mut cache_p = KvCache::new(1, 64, n_kv_heads, head_dim);
         let mut cache_d = KvCache::new(1, 64, n_kv_heads, head_dim);
 
-        let out_p = cached_attention_prefill(&mut cache_p, 0, 0, &q, &k, &v, n_heads, n_kv_heads)
-            .unwrap();
-        let out_d = cached_attention_decode(&mut cache_d, 0, 0, &q, &k, &v, n_heads, n_kv_heads)
-            .unwrap();
+        let out_p =
+            cached_attention_prefill(&mut cache_p, 0, 0, &q, &k, &v, n_heads, n_kv_heads).unwrap();
+        let out_d =
+            cached_attention_decode(&mut cache_d, 0, 0, &q, &k, &v, n_heads, n_kv_heads).unwrap();
 
         assert!(
             close_slice(out_p.as_slice(), out_d.as_slice(), 1e-5),
@@ -324,28 +336,37 @@ mod tests {
 
         // Prefill 2 tokens
         let q_p = Tensor::from_vec(vec![0.0_f32; 2 * head_dim], vec![2, head_dim]).unwrap();
-        let k_p = Tensor::from_vec(vec![0.0_f32; 2 * kv_dim],   vec![2, kv_dim]).unwrap();
-        let v_p = Tensor::from_vec(vec![
-            1.0_f32, 0.0,  // pos 0
-            2.0,     0.0,  // pos 1
-        ], vec![2, kv_dim]).unwrap();
-        cached_attention_prefill(&mut cache, 0, 0, &q_p, &k_p, &v_p, n_heads, n_kv_heads)
-            .unwrap();
+        let k_p = Tensor::from_vec(vec![0.0_f32; 2 * kv_dim], vec![2, kv_dim]).unwrap();
+        let v_p = Tensor::from_vec(
+            vec![
+                1.0_f32, 0.0, // pos 0
+                2.0, 0.0, // pos 1
+            ],
+            vec![2, kv_dim],
+        )
+        .unwrap();
+        cached_attention_prefill(&mut cache, 0, 0, &q_p, &k_p, &v_p, n_heads, n_kv_heads).unwrap();
 
         // Decode step: new token at pos=2
         let q_d = Tensor::from_vec(vec![0.0_f32; head_dim], vec![1, head_dim]).unwrap();
-        let k_d = Tensor::from_vec(vec![0.0_f32; kv_dim],   vec![1, kv_dim]).unwrap();
-        let v_d = Tensor::from_vec(vec![3.0_f32, 0.0],       vec![1, kv_dim]).unwrap();
+        let k_d = Tensor::from_vec(vec![0.0_f32; kv_dim], vec![1, kv_dim]).unwrap();
+        let v_d = Tensor::from_vec(vec![3.0_f32, 0.0], vec![1, kv_dim]).unwrap();
 
         let out = cached_attention_decode(&mut cache, 0, 2, &q_d, &k_d, &v_d, n_heads, n_kv_heads)
             .unwrap();
 
         assert_eq!(out.dims(), &[1, head_dim]);
         // Uniform attention over 3 positions → mean of [1,2,3] = 2.0
-        assert!((out.as_slice()[0] - 2.0).abs() < 1e-4,
-            "expected 2.0, got {}", out.as_slice()[0]);
-        assert!((out.as_slice()[1] - 0.0).abs() < 1e-4,
-            "expected 0.0, got {}", out.as_slice()[1]);
+        assert!(
+            (out.as_slice()[0] - 2.0).abs() < 1e-4,
+            "expected 2.0, got {}",
+            out.as_slice()[0]
+        );
+        assert!(
+            (out.as_slice()[1] - 0.0).abs() < 1e-4,
+            "expected 0.0, got {}",
+            out.as_slice()[1]
+        );
     }
 
     // ── error handling ────────────────────────────────────────────────────
@@ -356,12 +377,18 @@ mod tests {
         let n_kv_heads = 2_usize;
         let head_dim = 4_usize;
         let seq = 2_usize;
-        let q = Tensor::from_vec(vec![0.0_f32; seq * n_heads * head_dim],
-            vec![seq, n_heads * head_dim]).unwrap();
+        let q = Tensor::from_vec(
+            vec![0.0_f32; seq * n_heads * head_dim],
+            vec![seq, n_heads * head_dim],
+        )
+        .unwrap();
         // K has wrong second dim (not n_kv_heads * head_dim)
         let k = Tensor::from_vec(vec![0.0_f32; seq * 3], vec![seq, 3]).unwrap();
-        let v = Tensor::from_vec(vec![0.0_f32; seq * n_kv_heads * head_dim],
-            vec![seq, n_kv_heads * head_dim]).unwrap();
+        let v = Tensor::from_vec(
+            vec![0.0_f32; seq * n_kv_heads * head_dim],
+            vec![seq, n_kv_heads * head_dim],
+        )
+        .unwrap();
 
         let mut cache = KvCache::new(1, 64, n_kv_heads, head_dim);
         assert!(matches!(
@@ -377,8 +404,11 @@ mod tests {
         let head_dim = 4_usize;
         let kv_dim = n_kv_heads * head_dim;
         // q has 2 tokens — not allowed for decode
-        let q = Tensor::from_vec(vec![0.0_f32; 2 * n_heads * head_dim],
-            vec![2, n_heads * head_dim]).unwrap();
+        let q = Tensor::from_vec(
+            vec![0.0_f32; 2 * n_heads * head_dim],
+            vec![2, n_heads * head_dim],
+        )
+        .unwrap();
         let k = Tensor::from_vec(vec![0.0_f32; kv_dim], vec![1, kv_dim]).unwrap();
         let v = Tensor::from_vec(vec![0.0_f32; kv_dim], vec![1, kv_dim]).unwrap();
 

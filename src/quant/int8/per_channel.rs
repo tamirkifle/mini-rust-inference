@@ -119,7 +119,12 @@ pub fn quantize_per_channel(weights: &[f32], n_out: usize, k_in: usize) -> Quant
         }
     }
 
-    QuantizedMatrix { data, scales, n_out, k_in }
+    QuantizedMatrix {
+        data,
+        scales,
+        n_out,
+        k_in,
+    }
 }
 
 /// Quantises into caller-supplied storage to avoid allocation.
@@ -190,8 +195,13 @@ pub fn quantize_with_stats(
             let rec = f32::from(q) * scale;
             let err = (o - rec).abs();
             sse += err * err;
-            if err > max_err { max_err = err; }
-            if o.abs() > 1e-6 { rel_sum += err / o.abs(); rel_count += 1; }
+            if err > max_err {
+                max_err = err;
+            }
+            if o.abs() > 1e-6 {
+                rel_sum += err / o.abs();
+                rel_count += 1;
+            }
         }
         global_sse += sse;
         row_rmse.push((sse / k_in as f32).sqrt());
@@ -202,8 +212,16 @@ pub fn quantize_with_stats(
     let stats = PerChannelStats {
         row_rmse,
         row_max_err,
-        mean_rel_err: if rel_count > 0 { rel_sum / rel_count as f32 } else { 0.0 },
-        global_rmse: if total > 0.0 { (global_sse / total).sqrt() } else { 0.0 },
+        mean_rel_err: if rel_count > 0 {
+            rel_sum / rel_count as f32
+        } else {
+            0.0
+        },
+        global_rmse: if total > 0.0 {
+            (global_sse / total).sqrt()
+        } else {
+            0.0
+        },
     };
     (qm, stats)
 }
@@ -216,15 +234,17 @@ mod tests {
 
     const EPS: f32 = 1e-5;
 
-    fn approx(a: f32, b: f32, tol: f32) -> bool { (a - b).abs() < tol }
+    fn approx(a: f32, b: f32, tol: f32) -> bool {
+        (a - b).abs() < tol
+    }
 
     // ── scale correctness ─────────────────────────────────────────────────
 
     #[test]
     fn each_row_scale_is_max_abs_over_127() {
         let w = vec![
-            1.0_f32, -2.0, 3.0,   // row 0: max_abs=3 → 3/127
-            0.5_f32,  0.0, 0.25,  // row 1: max_abs=0.5 → 0.5/127
+            1.0_f32, -2.0, 3.0, // row 0: max_abs=3 → 3/127
+            0.5_f32, 0.0, 0.25, // row 1: max_abs=0.5 → 0.5/127
         ];
         let qm = quantize_per_channel(&w, 2, 3);
         assert!(approx(qm.scales[0], 3.0 / 127.0, EPS));
@@ -246,7 +266,7 @@ mod tests {
         let qm = quantize_per_channel(&w, 1, 4);
         // max_abs = 5 → scale = 5/127; -5.0 * 127/5 = -127; 5.0 * 127/5 = 127
         assert_eq!(qm.data[0], -127);
-        assert_eq!(qm.data[3],  127);
+        assert_eq!(qm.data[3], 127);
     }
 
     // ── independent rows ──────────────────────────────────────────────────
@@ -255,8 +275,8 @@ mod tests {
     fn rows_are_quantised_independently() {
         // Row 0 has large range, row 1 has small range
         let w = vec![
-            0.0_f32, 0.0, 127.0,   // row 0: scale = 127/127 = 1.0
-            0.0_f32, 0.0,   1.0,   // row 1: scale = 1/127
+            0.0_f32, 0.0, 127.0, // row 0: scale = 127/127 = 1.0
+            0.0_f32, 0.0, 1.0, // row 1: scale = 1/127
         ];
         let qm = quantize_per_channel(&w, 2, 3);
         // Row 0 last element → round(127 / 1.0) = 127
@@ -278,12 +298,15 @@ mod tests {
             let orig = &w[n * 32..(n + 1) * 32];
             let rec = qm.dequantize_row(n);
             let scale = qm.scales[n];
-            let max_err = orig.iter().zip(&rec)
+            let max_err = orig
+                .iter()
+                .zip(&rec)
                 .map(|(a, b)| (a - b).abs())
                 .fold(0.0_f32, f32::max);
             assert!(
                 max_err <= scale / 2.0 + 1e-6,
-                "row {n}: max_err={max_err} > scale/2={}", scale / 2.0
+                "row {n}: max_err={max_err} > scale/2={}",
+                scale / 2.0
             );
         }
     }
@@ -321,18 +344,22 @@ mod tests {
         let (_, pt_scale) = quantize_symmetric(&w);
         let pt_rmse = {
             let inv = 1.0 / pt_scale;
-            let sse: f32 = w.iter().map(|&v| {
-                let rec = (v * inv).round().clamp(-127.0, 127.0) as i8;
-                let diff = v - f32::from(rec) * pt_scale;
-                diff * diff
-            }).sum();
+            let sse: f32 = w
+                .iter()
+                .map(|&v| {
+                    let rec = (v * inv).round().clamp(-127.0, 127.0) as i8;
+                    let diff = v - f32::from(rec) * pt_scale;
+                    diff * diff
+                })
+                .sum();
             (sse / w.len() as f32).sqrt()
         };
 
         assert!(
             pc_stats.global_rmse < pt_rmse,
             "per-channel RMSE ({}) should be < per-tensor RMSE ({})",
-            pc_stats.global_rmse, pt_rmse
+            pc_stats.global_rmse,
+            pt_rmse
         );
     }
 
@@ -359,7 +386,8 @@ mod tests {
         let (_, stats) = quantize_with_stats(&w, 1, 128);
         assert!(
             stats.global_rmse < 1e-5,
-            "expected ~0 rmse, got {}", stats.global_rmse
+            "expected ~0 rmse, got {}",
+            stats.global_rmse
         );
     }
 
@@ -369,7 +397,8 @@ mod tests {
         let (_, stats) = quantize_with_stats(&w, 8, 32);
         assert!(
             stats.mean_rel_err < 0.01,
-            "mean rel err {:.4} >= 1%", stats.mean_rel_err
+            "mean rel err {:.4} >= 1%",
+            stats.mean_rel_err
         );
     }
 }

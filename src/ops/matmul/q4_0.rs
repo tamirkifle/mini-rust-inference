@@ -215,7 +215,7 @@ mod tests {
     fn test_matches_naive_single_block() {
         // 1-row weight [1, 32], 1-row input [1, 32]
         let w_row: Vec<f32> = (0..32).map(|i| i as f32 * 0.1 - 1.5).collect();
-        let weight_q4 = pack_weight(&[w_row.clone()]);
+        let weight_q4 = pack_weight(std::slice::from_ref(&w_row));
 
         // Build deq'd weight tensor for naive reference
         let w_deq_bytes = dequantize_q4_0(&weight_q4).unwrap();
@@ -240,7 +240,11 @@ mod tests {
     fn test_matches_naive_multi_row_weight() {
         // weight [4, 64], input [3, 64]
         let weight_rows: Vec<Vec<f32>> = (0..4)
-            .map(|n| (0..64).map(|k| ((n * 64 + k) as f32) * 0.02 - 0.5).collect())
+            .map(|n| {
+                (0..64)
+                    .map(|k| ((n * 64 + k) as f32) * 0.02 - 0.5)
+                    .collect()
+            })
             .collect();
         let weight_q4 = pack_weight(&weight_rows);
 
@@ -356,7 +360,11 @@ mod tests {
     fn test_larger_weight_correctness() {
         // weight [8, 128], input [4, 128] — exercise multiple blocks per row
         let weight_rows: Vec<Vec<f32>> = (0..8)
-            .map(|n| (0..128).map(|k| ((n * 128 + k) as f32) * 0.01 - 0.5).collect())
+            .map(|n| {
+                (0..128)
+                    .map(|k| ((n * 128 + k) as f32) * 0.01 - 0.5)
+                    .collect()
+            })
             .collect();
         let weight_q4 = pack_weight(&weight_rows);
         let w_deq_bytes = dequantize_q4_0(&weight_q4).unwrap();

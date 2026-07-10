@@ -75,7 +75,7 @@ pub enum AccessPattern {
 #[derive(Debug, Clone, Copy)]
 struct LayerRegion {
     start: usize, // inclusive byte offset into mmap
-    end:   usize, // exclusive
+    end: usize,   // exclusive
 }
 
 impl LayerRegion {
@@ -113,13 +113,13 @@ pub struct AccessStats {
 ///
 /// See the [module documentation](self) for design rationale and usage.
 pub struct WeightAccessor<'a> {
-    loader:         &'a GgufLoader,
-    layer_regions:  HashMap<usize, LayerRegion>,
-    global_region:  Option<LayerRegion>,
-    pattern:        AccessPattern,
-    stats:          AccessStats,
+    loader: &'a GgufLoader,
+    layer_regions: HashMap<usize, LayerRegion>,
+    global_region: Option<LayerRegion>,
+    pattern: AccessPattern,
+    stats: AccessStats,
     /// Layers that have received `WillNeed` but not yet `DontNeed`.
-    resident:       HashMap<usize, usize>, // layer_idx → bytes
+    resident: HashMap<usize, usize>, // layer_idx → bytes
 }
 
 impl<'a> WeightAccessor<'a> {
@@ -135,7 +135,7 @@ impl<'a> WeightAccessor<'a> {
             layer_regions,
             global_region,
             pattern: AccessPattern::default(),
-            stats:   AccessStats::default(),
+            stats: AccessStats::default(),
             resident: HashMap::new(),
         }
     }
@@ -148,7 +148,9 @@ impl<'a> WeightAccessor<'a> {
     /// No-op if `layer_idx` has no known tensors.
     pub fn prefetch_layer(&mut self, layer_idx: usize) {
         if let Some(&region) = self.layer_regions.get(&layer_idx) {
-            let _ = self.loader.mmap_advise_region(true, region.start, region.len());
+            let _ = self
+                .loader
+                .mmap_advise_region(true, region.start, region.len());
             self.stats.prefetch_hints += 1;
             let bytes = region.len();
             self.resident.entry(layer_idx).or_insert_with(|| {
@@ -164,7 +166,9 @@ impl<'a> WeightAccessor<'a> {
     /// Allows the OS to reclaim pages under memory pressure.
     pub fn evict_layer(&mut self, layer_idx: usize) {
         if let Some(&region) = self.layer_regions.get(&layer_idx) {
-            let _ = self.loader.mmap_advise_region(false, region.start, region.len());
+            let _ = self
+                .loader
+                .mmap_advise_region(false, region.start, region.len());
             self.stats.evict_hints += 1;
             if self.resident.remove(&layer_idx).is_some() {
                 self.stats.layers_evicted += 1;
@@ -178,7 +182,9 @@ impl<'a> WeightAccessor<'a> {
     /// These are used on every forward step and should always be resident.
     pub fn prefetch_global(&mut self) {
         if let Some(region) = self.global_region {
-            let _ = self.loader.mmap_advise_region(true, region.start, region.len());
+            let _ = self
+                .loader
+                .mmap_advise_region(true, region.start, region.len());
             self.stats.prefetch_hints += 1;
         }
     }
@@ -259,7 +265,7 @@ fn build_regions(
 
     for info in tensors.iter() {
         let abs_start = tensors.absolute_offset(info) as usize;
-        let abs_end   = abs_start + info.size_bytes();
+        let abs_end = abs_start + info.size_bytes();
 
         if let Some(layer_idx) = extract_layer_index(info.name()) {
             if layer_idx < n_layers {
@@ -282,7 +288,10 @@ fn build_regions(
         .collect();
 
     let global_region = if has_global && global_max > global_min {
-        Some(LayerRegion { start: global_min, end: global_max })
+        Some(LayerRegion {
+            start: global_min,
+            end: global_max,
+        })
     } else {
         None
     };
@@ -410,7 +419,10 @@ mod tests {
 
     #[test]
     fn test_extract_layer_index_layers_format() {
-        assert_eq!(extract_layer_index("model.layers.3.self_attn.q_proj.weight"), Some(3));
+        assert_eq!(
+            extract_layer_index("model.layers.3.self_attn.q_proj.weight"),
+            Some(3)
+        );
     }
 
     #[test]

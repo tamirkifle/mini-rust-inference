@@ -62,22 +62,30 @@ pub fn write_tensor<W: Write>(tensor: &Tensor<f32>, writer: &mut W) -> Result<()
     writer.write_all(&[VERSION]).map_err(|e| io_error(&e))?;
 
     // DType
-    writer.write_all(&[DType::F32 as u8]).map_err(|e| io_error(&e))?;
+    writer
+        .write_all(&[DType::F32 as u8])
+        .map_err(|e| io_error(&e))?;
 
     // NDim (safe truncation: tensors won't have > 4B dimensions)
     let ndim = tensor.ndim() as u32;
-    writer.write_all(&ndim.to_le_bytes()).map_err(|e| io_error(&e))?;
+    writer
+        .write_all(&ndim.to_le_bytes())
+        .map_err(|e| io_error(&e))?;
 
     // Dims
     for &dim in tensor.dims() {
         let dim_u64 = dim as u64;
-        writer.write_all(&dim_u64.to_le_bytes()).map_err(|e| io_error(&e))?;
+        writer
+            .write_all(&dim_u64.to_le_bytes())
+            .map_err(|e| io_error(&e))?;
     }
 
     // Data
     let data = tensor.as_slice();
     for &val in data {
-        writer.write_all(&val.to_le_bytes()).map_err(|e| io_error(&e))?;
+        writer
+            .write_all(&val.to_le_bytes())
+            .map_err(|e| io_error(&e))?;
     }
 
     Ok(())
@@ -123,14 +131,18 @@ pub fn read_tensor<R: Read>(reader: &mut R) -> Result<Tensor<f32>> {
 
     // NDim
     let mut ndim_bytes = [0u8; 4];
-    reader.read_exact(&mut ndim_bytes).map_err(|e| io_error(&e))?;
+    reader
+        .read_exact(&mut ndim_bytes)
+        .map_err(|e| io_error(&e))?;
     let ndim = u32::from_le_bytes(ndim_bytes) as usize;
 
     // Dims (safe truncation on 32-bit: dims won't exceed usize)
     let mut dims = Vec::with_capacity(ndim);
     for _ in 0..ndim {
         let mut dim_bytes = [0u8; 8];
-        reader.read_exact(&mut dim_bytes).map_err(|e| io_error(&e))?;
+        reader
+            .read_exact(&mut dim_bytes)
+            .map_err(|e| io_error(&e))?;
         dims.push(u64::from_le_bytes(dim_bytes) as usize);
     }
 
@@ -141,7 +153,9 @@ pub fn read_tensor<R: Read>(reader: &mut R) -> Result<Tensor<f32>> {
     let mut data = Vec::with_capacity(numel);
     for _ in 0..numel {
         let mut val_bytes = [0u8; 4];
-        reader.read_exact(&mut val_bytes).map_err(|e| io_error(&e))?;
+        reader
+            .read_exact(&mut val_bytes)
+            .map_err(|e| io_error(&e))?;
         data.push(f32::from_le_bytes(val_bytes));
     }
 
@@ -269,7 +283,10 @@ mod tests {
         // Check dtype (F32 = 0)
         assert_eq!(bytes[5], 0);
         // Check ndim (1)
-        assert_eq!(u32::from_le_bytes([bytes[6], bytes[7], bytes[8], bytes[9]]), 1);
+        assert_eq!(
+            u32::from_le_bytes([bytes[6], bytes[7], bytes[8], bytes[9]]),
+            1
+        );
     }
 
     #[test]

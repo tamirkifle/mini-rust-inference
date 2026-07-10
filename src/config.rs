@@ -42,8 +42,8 @@ pub struct SessionConfig {
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
-            generate:    GenerateConfig::default(),
-            chunk_size:  512,
+            generate: GenerateConfig::default(),
+            chunk_size: 512,
             max_seq_len: 2048,
         }
     }
@@ -53,9 +53,13 @@ impl SessionConfig {
     /// Construct with explicit parameters.
     #[must_use]
     pub fn new(generate: GenerateConfig, chunk_size: usize, max_seq_len: usize) -> Self {
-        assert!(chunk_size > 0,  "SessionConfig: chunk_size must be ≥ 1");
+        assert!(chunk_size > 0, "SessionConfig: chunk_size must be ≥ 1");
         assert!(max_seq_len > 0, "SessionConfig: max_seq_len must be ≥ 1");
-        Self { generate, chunk_size, max_seq_len }
+        Self {
+            generate,
+            chunk_size,
+            max_seq_len,
+        }
     }
 
     /// Greedy-decoding preset.
@@ -64,8 +68,8 @@ impl SessionConfig {
     #[must_use]
     pub fn greedy(max_new_tokens: usize) -> Self {
         Self {
-            generate:    GenerateConfig::greedy(max_new_tokens),
-            chunk_size:  512,
+            generate: GenerateConfig::greedy(max_new_tokens),
+            chunk_size: 512,
             max_seq_len: 2048,
         }
     }
@@ -80,7 +84,7 @@ mod tests {
     #[test]
     fn test_default_values() {
         let cfg = SessionConfig::default();
-        assert_eq!(cfg.chunk_size,  512);
+        assert_eq!(cfg.chunk_size, 512);
         assert_eq!(cfg.max_seq_len, 2048);
         assert_eq!(cfg.generate.max_new_tokens, 128);
     }
@@ -90,7 +94,7 @@ mod tests {
         let cfg = SessionConfig::greedy(64);
         assert_eq!(cfg.generate.max_new_tokens, 64);
         assert_eq!(cfg.generate.sampling.temperature, 0.0);
-        assert_eq!(cfg.chunk_size,  512);
+        assert_eq!(cfg.chunk_size, 512);
         assert_eq!(cfg.max_seq_len, 2048);
     }
 
@@ -98,7 +102,7 @@ mod tests {
     fn test_new_explicit() {
         use crate::generate::GenerateConfig;
         let cfg = SessionConfig::new(GenerateConfig::greedy(10), 32, 256);
-        assert_eq!(cfg.chunk_size,  32);
+        assert_eq!(cfg.chunk_size, 32);
         assert_eq!(cfg.max_seq_len, 256);
         assert_eq!(cfg.generate.max_new_tokens, 10);
     }

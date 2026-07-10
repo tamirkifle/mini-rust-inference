@@ -10,4 +10,4 @@
 //! | `metrics` | Wall-clock timer, `InferenceMetrics`, RSS   |
 
 pub mod metrics;
-pub use metrics::{InferenceMetrics, Timer, measure_generate};
+pub use metrics::{measure_generate, InferenceMetrics, Timer};

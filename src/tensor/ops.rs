@@ -76,8 +76,10 @@ impl<T: Clone> Tensor<T> {
     /// ```
     pub fn permute(&self, dims: &[usize]) -> Result<Self> {
         let new_layout = self.layout().permute(dims)?;
-        Ok(Self::from_vec_with_layout(self.as_slice().to_vec(), new_layout)
-            .expect("permute should preserve buffer size"))
+        Ok(
+            Self::from_vec_with_layout(self.as_slice().to_vec(), new_layout)
+                .expect("permute should preserve buffer size"),
+        )
     }
 
     /// Removes dimensions of size 1.
@@ -110,10 +112,7 @@ impl<T: Clone> Tensor<T> {
                 }
                 if old_dims[d] != 1 {
                     return Err(TensorError::InvalidShape {
-                        reason: format!(
-                            "cannot squeeze dimension {d} with size {}",
-                            old_dims[d]
-                        ),
+                        reason: format!("cannot squeeze dimension {d} with size {}", old_dims[d]),
                     });
                 }
                 old_dims
@@ -391,8 +390,14 @@ mod tests {
         assert_eq!(permuted.dims(), &[4, 2, 3]);
 
         // Verify element mapping: original [i,j,k] -> permuted [k,i,j]
-        assert!(approx_eq(*tensor.get(&[0, 0, 0]).unwrap(), *permuted.get(&[0, 0, 0]).unwrap()));
-        assert!(approx_eq(*tensor.get(&[1, 2, 3]).unwrap(), *permuted.get(&[3, 1, 2]).unwrap()));
+        assert!(approx_eq(
+            *tensor.get(&[0, 0, 0]).unwrap(),
+            *permuted.get(&[0, 0, 0]).unwrap()
+        ));
+        assert!(approx_eq(
+            *tensor.get(&[1, 2, 3]).unwrap(),
+            *permuted.get(&[3, 1, 2]).unwrap()
+        ));
     }
 
     #[test]

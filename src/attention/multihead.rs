@@ -23,9 +23,9 @@
 //! - Both causal and non-causal variants are provided.
 //! - GQA (n_kv_heads != n_heads) lives in commit 7.4 (`gqa.rs`).
 
-use crate::tensor::{Result, Tensor, TensorError};
-use crate::attention::sdpa::scaled_dot_product_attention_with_bias;
 use crate::attention::mask::causal_mask;
+use crate::attention::sdpa::scaled_dot_product_attention_with_bias;
+use crate::tensor::{Result, Tensor, TensorError};
 
 // ── head split / concat helpers ─────────────────────────────────────────────
 
@@ -39,32 +39,41 @@ use crate::attention::mask::causal_mask;
 /// * [`TensorError::InvalidShape`] if `x` is not 2-D.
 /// * [`TensorError::InvalidShape`] if `x.dims()[1] % n_heads != 0` or `h >= n_heads`.
 #[must_use = "returns a new contiguous head tensor"] // CHANGED
-pub fn split_head( // CHANGED
-    x:       &Tensor<f32>,
+pub fn split_head(
+    // CHANGED
+    x: &Tensor<f32>,
     n_heads: usize,
-    h:       usize,
+    h: usize,
 ) -> Result<Tensor<f32>> {
-    if x.ndim() != 2 { // CHANGED
+    if x.ndim() != 2 {
+        // CHANGED
         return Err(TensorError::InvalidShape {
-            reason: format!("split_head: x must be 2-D, got {}D {:?}", x.ndim(), x.dims()),
+            reason: format!(
+                "split_head: x must be 2-D, got {}D {:?}",
+                x.ndim(),
+                x.dims()
+            ),
         });
     }
-    let seq      = x.dims()[0]; // CHANGED
-    let total_d  = x.dims()[1]; // CHANGED
-    if total_d % n_heads != 0 { // CHANGED
+    let seq = x.dims()[0]; // CHANGED
+    let total_d = x.dims()[1]; // CHANGED
+    if total_d % n_heads != 0 {
+        // CHANGED
         return Err(TensorError::InvalidShape {
             reason: format!(
                 "split_head: total_d({total_d}) is not divisible by n_heads({n_heads})"
             ),
         });
     }
-    if h >= n_heads { // CHANGED
+    if h >= n_heads {
+        // CHANGED
         return Err(TensorError::InvalidShape {
             reason: format!("split_head: head index {h} >= n_heads {n_heads}"),
         });
     }
     let d_head = total_d / n_heads; // CHANGED
-    let src    = if x.is_contiguous() { // CHANGED
+    let src = if x.is_contiguous() {
+        // CHANGED
         std::borrow::Cow::Borrowed(x)
     } else {
         std::borrow::Cow::Owned(x.contiguous())
@@ -73,7 +82,8 @@ pub fn split_head( // CHANGED
 
     // CHANGED: gather head h's columns into a contiguous buffer
     let mut data = vec![0.0_f32; seq * d_head]; // CHANGED
-    for i in 0..seq { // CHANGED
+    for i in 0..seq {
+        // CHANGED
         let src_off = i * total_d + h * d_head; // CHANGED
         let dst_off = i * d_head; // CHANGED
         data[dst_off..dst_off + d_head] // CHANGED
@@ -90,16 +100,20 @@ pub fn split_head( // CHANGED
 ///
 /// * [`TensorError::InvalidShape`] if `heads` is empty or shapes are inconsistent.
 #[must_use = "returns the concatenated tensor"] // CHANGED
-pub fn concat_heads(heads: &[Tensor<f32>]) -> Result<Tensor<f32>> { // CHANGED
-    if heads.is_empty() { // CHANGED
+pub fn concat_heads(heads: &[Tensor<f32>]) -> Result<Tensor<f32>> {
+    // CHANGED
+    if heads.is_empty() {
+        // CHANGED
         return Err(TensorError::InvalidShape {
             reason: "concat_heads: heads slice must not be empty".to_string(),
         });
     }
-    let seq    = heads[0].dims()[0]; // CHANGED
+    let seq = heads[0].dims()[0]; // CHANGED
     let d_head = heads[0].dims()[1]; // CHANGED
-    for (i, h) in heads.iter().enumerate() { // CHANGED
-        if h.ndim() != 2 || h.dims()[0] != seq || h.dims()[1] != d_head { // CHANGED
+    for (i, h) in heads.iter().enumerate() {
+        // CHANGED
+        if h.ndim() != 2 || h.dims()[0] != seq || h.dims()[1] != d_head {
+            // CHANGED
             return Err(TensorError::InvalidShape {
                 reason: format!(
                     "concat_heads: head {i} has shape {:?}, expected [{seq}, {d_head}]",
@@ -108,17 +122,20 @@ pub fn concat_heads(heads: &[Tensor<f32>]) -> Result<Tensor<f32>> { // CHANGED
             });
         }
     }
-    let n_heads  = heads.len(); // CHANGED
-    let total_d  = n_heads * d_head; // CHANGED
+    let n_heads = heads.len(); // CHANGED
+    let total_d = n_heads * d_head; // CHANGED
     let mut data = vec![0.0_f32; seq * total_d]; // CHANGED
-    for (h_idx, head) in heads.iter().enumerate() { // CHANGED
-        let src = if head.is_contiguous() { // CHANGED
+    for (h_idx, head) in heads.iter().enumerate() {
+        // CHANGED
+        let src = if head.is_contiguous() {
+            // CHANGED
             std::borrow::Cow::Borrowed(head)
         } else {
             std::borrow::Cow::Owned(head.contiguous())
         };
         let src_data = src.as_slice(); // CHANGED
-        for i in 0..seq { // CHANGED
+        for i in 0..seq {
+            // CHANGED
             let dst_off = i * total_d + h_idx * d_head; // CHANGED
             let src_off = i * d_head; // CHANGED
             data[dst_off..dst_off + d_head] // CHANGED
@@ -131,28 +148,33 @@ pub fn concat_heads(heads: &[Tensor<f32>]) -> Result<Tensor<f32>> { // CHANGED
 // ── core MHA implementation ─────────────────────────────────────────────────
 
 /// Validate common MHA preconditions; return `(seq_q, seq_k, d_k, d_v)`.
-fn mha_check( // CHANGED
-    q:       &Tensor<f32>,
-    k:       &Tensor<f32>,
-    v:       &Tensor<f32>,
+fn mha_check(
+    // CHANGED
+    q: &Tensor<f32>,
+    k: &Tensor<f32>,
+    v: &Tensor<f32>,
     n_heads: usize,
 ) -> Result<(usize, usize, usize, usize)> {
-    if q.ndim() != 2 { // CHANGED
+    if q.ndim() != 2 {
+        // CHANGED
         return Err(TensorError::InvalidShape {
             reason: format!("mha: q must be 2-D, got {}D", q.ndim()),
         });
     }
-    if k.ndim() != 2 { // CHANGED
+    if k.ndim() != 2 {
+        // CHANGED
         return Err(TensorError::InvalidShape {
             reason: format!("mha: k must be 2-D, got {}D", k.ndim()),
         });
     }
-    if v.ndim() != 2 { // CHANGED
+    if v.ndim() != 2 {
+        // CHANGED
         return Err(TensorError::InvalidShape {
             reason: format!("mha: v must be 2-D, got {}D", v.ndim()),
         });
     }
-    if n_heads == 0 { // CHANGED
+    if n_heads == 0 {
+        // CHANGED
         return Err(TensorError::InvalidShape {
             reason: "mha: n_heads must be > 0".to_string(),
         });
@@ -160,36 +182,36 @@ fn mha_check( // CHANGED
     let q_total = q.dims()[1]; // CHANGED
     let k_total = k.dims()[1]; // CHANGED
     let v_total = v.dims()[1]; // CHANGED
-    if q_total != k_total { // CHANGED
+    if q_total != k_total {
+        // CHANGED
         return Err(TensorError::ShapeMismatch {
             expected: q.dims().to_vec(),
-            got:      k.dims().to_vec(),
+            got: k.dims().to_vec(),
         });
     }
-    if q_total % n_heads != 0 { // CHANGED
+    if q_total % n_heads != 0 {
+        // CHANGED
         return Err(TensorError::InvalidShape {
-            reason: format!(
-                "mha: q dim ({q_total}) not divisible by n_heads ({n_heads})"
-            ),
+            reason: format!("mha: q dim ({q_total}) not divisible by n_heads ({n_heads})"),
         });
     }
-    if v_total % n_heads != 0 { // CHANGED
+    if v_total % n_heads != 0 {
+        // CHANGED
         return Err(TensorError::InvalidShape {
-            reason: format!(
-                "mha: v dim ({v_total}) not divisible by n_heads ({n_heads})"
-            ),
+            reason: format!("mha: v dim ({v_total}) not divisible by n_heads ({n_heads})"),
         });
     }
-    if k.dims()[0] != v.dims()[0] { // CHANGED
+    if k.dims()[0] != v.dims()[0] {
+        // CHANGED
         return Err(TensorError::ShapeMismatch {
             expected: vec![k.dims()[0], v.dims()[1]],
-            got:      v.dims().to_vec(),
+            got: v.dims().to_vec(),
         });
     }
     let seq_q = q.dims()[0]; // CHANGED
     let seq_k = k.dims()[0]; // CHANGED
-    let d_k   = q_total / n_heads; // CHANGED
-    let d_v   = v_total / n_heads; // CHANGED
+    let d_k = q_total / n_heads; // CHANGED
+    let d_v = v_total / n_heads; // CHANGED
     Ok((seq_q, seq_k, d_k, d_v)) // CHANGED
 }
 
@@ -210,22 +232,25 @@ fn mha_check( // CHANGED
 ///
 /// * [`TensorError::InvalidShape`] / [`TensorError::ShapeMismatch`] on bad inputs.
 #[must_use = "returns the multi-head attention output"] // CHANGED
-pub fn multi_head_attention( // CHANGED
-    q:       &Tensor<f32>,
-    k:       &Tensor<f32>,
-    v:       &Tensor<f32>,
+pub fn multi_head_attention(
+    // CHANGED
+    q: &Tensor<f32>,
+    k: &Tensor<f32>,
+    v: &Tensor<f32>,
     n_heads: usize,
 ) -> Result<Tensor<f32>> {
     let (_seq_q, _seq_k, _d_k, _d_v) = mha_check(q, k, v, n_heads)?; // CHANGED
 
     // CHANGED: run SDPA per head, collect outputs
     let mut head_outputs: Vec<Tensor<f32>> = Vec::with_capacity(n_heads); // CHANGED
-    for h in 0..n_heads { // CHANGED
+    for h in 0..n_heads {
+        // CHANGED
         let q_h = split_head(q, n_heads, h)?; // CHANGED: [seq_q, d_k]
         let k_h = split_head(k, n_heads, h)?; // CHANGED: [seq_k, d_k]
         let v_h = split_head(v, n_heads, h)?; // CHANGED: [seq_k, d_v]
-        // zero bias = no mask
-        let bias = Tensor::from_vec( // CHANGED
+                                              // zero bias = no mask
+        let bias = Tensor::from_vec(
+            // CHANGED
             vec![0.0_f32; q_h.dims()[0] * k_h.dims()[0]],
             vec![q_h.dims()[0], k_h.dims()[0]],
         )?;
@@ -245,14 +270,16 @@ pub fn multi_head_attention( // CHANGED
 /// Same as [`multi_head_attention`] plus [`TensorError::InvalidShape`] if
 /// `seq_q != seq_k`.
 #[must_use = "returns the causally-masked multi-head attention output"] // CHANGED
-pub fn multi_head_attention_causal( // CHANGED
-    q:       &Tensor<f32>,
-    k:       &Tensor<f32>,
-    v:       &Tensor<f32>,
+pub fn multi_head_attention_causal(
+    // CHANGED
+    q: &Tensor<f32>,
+    k: &Tensor<f32>,
+    v: &Tensor<f32>,
     n_heads: usize,
 ) -> Result<Tensor<f32>> {
     let (seq_q, seq_k, _d_k, _d_v) = mha_check(q, k, v, n_heads)?; // CHANGED
-    if seq_q != seq_k { // CHANGED
+    if seq_q != seq_k {
+        // CHANGED
         return Err(TensorError::InvalidShape {
             reason: format!(
                 "multi_head_attention_causal: seq_q({seq_q}) != seq_k({seq_k}); \
@@ -263,7 +290,8 @@ pub fn multi_head_attention_causal( // CHANGED
     let mask = causal_mask(seq_q)?; // CHANGED: shared across all heads
 
     let mut head_outputs: Vec<Tensor<f32>> = Vec::with_capacity(n_heads); // CHANGED
-    for h in 0..n_heads { // CHANGED
+    for h in 0..n_heads {
+        // CHANGED
         let q_h = split_head(q, n_heads, h)?; // CHANGED
         let k_h = split_head(k, n_heads, h)?; // CHANGED
         let v_h = split_head(v, n_heads, h)?; // CHANGED
@@ -281,18 +309,20 @@ pub fn multi_head_attention_causal( // CHANGED
 ///
 /// Same as [`multi_head_attention`]; see also [`causal_mask_with_offset`].
 #[must_use = "returns the masked multi-head attention output"] // CHANGED
-pub fn multi_head_attention_causal_with_offset( // CHANGED
-    q:         &Tensor<f32>,
-    k:         &Tensor<f32>,
-    v:         &Tensor<f32>,
-    n_heads:   usize,
+pub fn multi_head_attention_causal_with_offset(
+    // CHANGED
+    q: &Tensor<f32>,
+    k: &Tensor<f32>,
+    v: &Tensor<f32>,
+    n_heads: usize,
     start_pos: usize,
 ) -> Result<Tensor<f32>> {
     let (seq_q, seq_k, _d_k, _d_v) = mha_check(q, k, v, n_heads)?; // CHANGED
     let mask = crate::attention::mask::causal_mask_with_offset(seq_q, seq_k, start_pos)?; // CHANGED
 
     let mut head_outputs: Vec<Tensor<f32>> = Vec::with_capacity(n_heads); // CHANGED
-    for h in 0..n_heads { // CHANGED
+    for h in 0..n_heads {
+        // CHANGED
         let q_h = split_head(q, n_heads, h)?; // CHANGED
         let k_h = split_head(k, n_heads, h)?; // CHANGED
         let v_h = split_head(v, n_heads, h)?; // CHANGED
@@ -316,7 +346,8 @@ mod tests {
     // ── split_head ────────────────────────────────────────────────────────
 
     #[test]
-    fn test_split_head_shape() { // CHANGED
+    fn test_split_head_shape() {
+        // CHANGED
         // [4, 6] with n_heads=3 → each head is [4, 2]
         let x = Tensor::from_vec(vec![0.0_f32; 24], vec![4, 6]).unwrap();
         let h = split_head(&x, 3, 0).unwrap();
@@ -324,13 +355,15 @@ mod tests {
     }
 
     #[test]
-    fn test_split_head_values() { // CHANGED
+    fn test_split_head_values() {
+        // CHANGED
         // [2, 4], n_heads=2: head 0 = cols 0,1; head 1 = cols 2,3
         // row 0: [10,20,30,40], row 1: [50,60,70,80]
         let x = Tensor::from_vec(
-            vec![10.0_f32, 20.0, 30.0, 40.0,
-                 50.0,     60.0, 70.0, 80.0],
-            vec![2, 4]).unwrap();
+            vec![10.0_f32, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0],
+            vec![2, 4],
+        )
+        .unwrap();
         let h0 = split_head(&x, 2, 0).unwrap();
         let h1 = split_head(&x, 2, 1).unwrap();
         assert!(close_slice(h0.as_slice(), &[10.0, 20.0, 50.0, 60.0], 1e-6));
@@ -338,21 +371,30 @@ mod tests {
     }
 
     #[test]
-    fn test_split_head_out_of_range() { // CHANGED
+    fn test_split_head_out_of_range() {
+        // CHANGED
         let x = Tensor::from_vec(vec![0.0_f32; 8], vec![2, 4]).unwrap();
-        assert!(matches!(split_head(&x, 2, 2), Err(TensorError::InvalidShape { .. })));
+        assert!(matches!(
+            split_head(&x, 2, 2),
+            Err(TensorError::InvalidShape { .. })
+        ));
     }
 
     #[test]
-    fn test_split_head_not_divisible() { // CHANGED
+    fn test_split_head_not_divisible() {
+        // CHANGED
         let x = Tensor::from_vec(vec![0.0_f32; 6], vec![2, 3]).unwrap();
-        assert!(matches!(split_head(&x, 2, 0), Err(TensorError::InvalidShape { .. })));
+        assert!(matches!(
+            split_head(&x, 2, 0),
+            Err(TensorError::InvalidShape { .. })
+        ));
     }
 
     // ── concat_heads ──────────────────────────────────────────────────────
 
     #[test]
-    fn test_concat_heads_shape() { // CHANGED
+    fn test_concat_heads_shape() {
+        // CHANGED
         let h0 = Tensor::from_vec(vec![0.0_f32; 8], vec![4, 2]).unwrap();
         let h1 = Tensor::from_vec(vec![0.0_f32; 8], vec![4, 2]).unwrap();
         let h2 = Tensor::from_vec(vec![0.0_f32; 8], vec![4, 2]).unwrap();
@@ -361,28 +403,37 @@ mod tests {
     }
 
     #[test]
-    fn test_concat_heads_roundtrip() { // CHANGED
+    fn test_concat_heads_roundtrip() {
+        // CHANGED
         // split then concat should recover the original tensor
         let data: Vec<f32> = (0..16).map(|i| i as f32).collect();
-        let x  = Tensor::from_vec(data.clone(), vec![2, 8]).unwrap();
+        let x = Tensor::from_vec(data.clone(), vec![2, 8]).unwrap();
         let h0 = split_head(&x, 4, 0).unwrap();
         let h1 = split_head(&x, 4, 1).unwrap();
         let h2 = split_head(&x, 4, 2).unwrap();
         let h3 = split_head(&x, 4, 3).unwrap();
         let out = concat_heads(&[h0, h1, h2, h3]).unwrap();
-        assert!(close_slice(out.as_slice(), &data, 1e-7),
-            "roundtrip failed: {:?}", out.as_slice());
+        assert!(
+            close_slice(out.as_slice(), &data, 1e-7),
+            "roundtrip failed: {:?}",
+            out.as_slice()
+        );
     }
 
     #[test]
-    fn test_concat_heads_empty_rejected() { // CHANGED
-        assert!(matches!(concat_heads(&[]), Err(TensorError::InvalidShape { .. })));
+    fn test_concat_heads_empty_rejected() {
+        // CHANGED
+        assert!(matches!(
+            concat_heads(&[]),
+            Err(TensorError::InvalidShape { .. })
+        ));
     }
 
     // ── multi_head_attention output shape ────────────────────────────────
 
     #[test]
-    fn test_mha_output_shape_1_head() { // CHANGED
+    fn test_mha_output_shape_1_head() {
+        // CHANGED
         // With 1 head MHA == SDPA
         let q = Tensor::from_vec(vec![0.0_f32; 12], vec![3, 4]).unwrap();
         let k = Tensor::from_vec(vec![0.0_f32; 12], vec![3, 4]).unwrap();
@@ -392,7 +443,8 @@ mod tests {
     }
 
     #[test]
-    fn test_mha_output_shape_4_heads() { // CHANGED
+    fn test_mha_output_shape_4_heads() {
+        // CHANGED
         // Q/K: [5, 8] with 4 heads → d_k=2; V: [5, 8] → d_v=2; out: [5, 8]
         let q = Tensor::from_vec(vec![0.0_f32; 40], vec![5, 8]).unwrap();
         let k = Tensor::from_vec(vec![0.0_f32; 40], vec![5, 8]).unwrap();
@@ -404,7 +456,8 @@ mod tests {
     // ── 1-head MHA must match plain SDPA exactly ─────────────────────────
 
     #[test]
-    fn test_mha_1head_matches_sdpa() { // CHANGED
+    fn test_mha_1head_matches_sdpa() {
+        // CHANGED
         let data_q = vec![1.0_f32, 0.0, 0.5, 0.5];
         let data_k = vec![0.3_f32, 0.7, 0.9, 0.1];
         let data_v = vec![1.0_f32, 2.0, 3.0, 4.0];
@@ -412,18 +465,22 @@ mod tests {
         let k = Tensor::from_vec(data_k.clone(), vec![2, 2]).unwrap();
         let v = Tensor::from_vec(data_v.clone(), vec![2, 2]).unwrap();
 
-        let mha_out  = multi_head_attention(&q, &k, &v, 1).unwrap();
+        let mha_out = multi_head_attention(&q, &k, &v, 1).unwrap();
         let sdpa_out = scaled_dot_product_attention(&q, &k, &v).unwrap();
 
-        assert!(close_slice(mha_out.as_slice(), sdpa_out.as_slice(), 1e-6),
+        assert!(
+            close_slice(mha_out.as_slice(), sdpa_out.as_slice(), 1e-6),
             "1-head MHA differs from SDPA:\n  mha={:?}\n  sdpa={:?}",
-            mha_out.as_slice(), sdpa_out.as_slice());
+            mha_out.as_slice(),
+            sdpa_out.as_slice()
+        );
     }
 
     // ── multi-head: each head operates independently ──────────────────────
 
     #[test]
-    fn test_mha_heads_independent() { // CHANGED
+    fn test_mha_heads_independent() {
+        // CHANGED
         // Build Q, K, V such that head 0 gets all-zero inputs and head 1 gets
         // distinct inputs.  The output for head 0 should equal uniform-attention
         // on V head 0, regardless of what head 1 does.
@@ -431,15 +488,23 @@ mod tests {
         // seq=2, n_heads=2, d_k=2, d_v=2
         // Q: [2, 4]  head0 cols=[0,1], head1 cols=[2,3]
         // Set head0 of Q and K to 0 (uniform attn), head1 to identity-like values
-        let q = Tensor::from_vec(vec![
-            0.0_f32, 0.0, 1.0, 0.0, // token 0: head0=[0,0], head1=[1,0]
-            0.0,     0.0, 0.0, 1.0, // token 1: head0=[0,0], head1=[0,1]
-        ], vec![2, 4]).unwrap();
+        let q = Tensor::from_vec(
+            vec![
+                0.0_f32, 0.0, 1.0, 0.0, // token 0: head0=[0,0], head1=[1,0]
+                0.0, 0.0, 0.0, 1.0, // token 1: head0=[0,0], head1=[0,1]
+            ],
+            vec![2, 4],
+        )
+        .unwrap();
         let k = q.clone();
-        let v = Tensor::from_vec(vec![
-            10.0_f32, 20.0, 1.0, 2.0, // head0 values=[10,20], head1 values=[1,2]
-            30.0,     40.0, 3.0, 4.0,
-        ], vec![2, 4]).unwrap();
+        let v = Tensor::from_vec(
+            vec![
+                10.0_f32, 20.0, 1.0, 2.0, // head0 values=[10,20], head1 values=[1,2]
+                30.0, 40.0, 3.0, 4.0,
+            ],
+            vec![2, 4],
+        )
+        .unwrap();
 
         let out = multi_head_attention(&q, &k, &v, 2).unwrap();
         assert_eq!(out.dims(), &[2, 4]);
@@ -448,28 +513,37 @@ mod tests {
         // Both output rows for head 0 should be [20, 30]
         let row0_h0 = [out.as_slice()[0], out.as_slice()[1]];
         let row1_h0 = [out.as_slice()[4], out.as_slice()[5]];
-        assert!(close_slice(&row0_h0, &[20.0, 30.0], 1e-4),
-            "head0 row0 = {:?}", row0_h0);
-        assert!(close_slice(&row1_h0, &[20.0, 30.0], 1e-4),
-            "head0 row1 = {:?}", row1_h0);
+        assert!(
+            close_slice(&row0_h0, &[20.0, 30.0], 1e-4),
+            "head0 row0 = {:?}",
+            row0_h0
+        );
+        assert!(
+            close_slice(&row1_h0, &[20.0, 30.0], 1e-4),
+            "head0 row1 = {:?}",
+            row1_h0
+        );
     }
 
     // ── causal MHA: token 0 attends only to itself ────────────────────────
 
     #[test]
-    fn test_mha_causal_first_token_self_only() { // CHANGED
+    fn test_mha_causal_first_token_self_only() {
+        // CHANGED
         // Same premise as mask tests: with 2 heads × 2 tokens,
         // token 0 may only attend to itself in the causal variant.
-        let q = Tensor::from_vec(vec![
-            1.0_f32, 0.0,  0.0, 1.0, // token 0
-            0.0,     1.0,  1.0, 0.0, // token 1
-        ], vec![2, 4]).unwrap();
+        let q = Tensor::from_vec(
+            vec![
+                1.0_f32, 0.0, 0.0, 1.0, // token 0
+                0.0, 1.0, 1.0, 0.0, // token 1
+            ],
+            vec![2, 4],
+        )
+        .unwrap();
         let k = q.clone();
         // V head0: row0=[1,2], row1=[3,4];  V head1: row0=[5,6], row1=[7,8]
-        let v = Tensor::from_vec(vec![
-            1.0_f32, 2.0, 5.0, 6.0,
-            3.0,     4.0, 7.0, 8.0,
-        ], vec![2, 4]).unwrap();
+        let v =
+            Tensor::from_vec(vec![1.0_f32, 2.0, 5.0, 6.0, 3.0, 4.0, 7.0, 8.0], vec![2, 4]).unwrap();
 
         let out = multi_head_attention_causal(&q, &k, &v, 2).unwrap();
         assert_eq!(out.dims(), &[2, 4]);
@@ -485,9 +559,10 @@ mod tests {
     // ── causal with offset (decode step) ─────────────────────────────────
 
     #[test]
-    fn test_mha_causal_offset_output_shape() { // CHANGED
+    fn test_mha_causal_offset_output_shape() {
+        // CHANGED
         // decode: q=[1, 4], k=[3, 4], v=[3, 4], n_heads=2, start_pos=2
-        let q = Tensor::from_vec(vec![0.0_f32; 4],  vec![1, 4]).unwrap();
+        let q = Tensor::from_vec(vec![0.0_f32; 4], vec![1, 4]).unwrap();
         let k = Tensor::from_vec(vec![0.0_f32; 12], vec![3, 4]).unwrap();
         let v = Tensor::from_vec(vec![0.0_f32; 12], vec![3, 4]).unwrap();
         let out = multi_head_attention_causal_with_offset(&q, &k, &v, 2, 2).unwrap();
@@ -497,23 +572,32 @@ mod tests {
     // ── error handling ────────────────────────────────────────────────────
 
     #[test]
-    fn test_mha_zero_heads_rejected() { // CHANGED
+    fn test_mha_zero_heads_rejected() {
+        // CHANGED
         let q = Tensor::from_vec(vec![1.0_f32; 4], vec![2, 2]).unwrap();
         let k = q.clone();
         let v = q.clone();
-        assert!(matches!(multi_head_attention(&q, &k, &v, 0), Err(TensorError::InvalidShape { .. })));
+        assert!(matches!(
+            multi_head_attention(&q, &k, &v, 0),
+            Err(TensorError::InvalidShape { .. })
+        ));
     }
 
     #[test]
-    fn test_mha_heads_not_divisible_rejected() { // CHANGED
+    fn test_mha_heads_not_divisible_rejected() {
+        // CHANGED
         let q = Tensor::from_vec(vec![1.0_f32; 6], vec![2, 3]).unwrap();
         let k = q.clone();
         let v = q.clone();
-        assert!(matches!(multi_head_attention(&q, &k, &v, 2), Err(TensorError::InvalidShape { .. })));
+        assert!(matches!(
+            multi_head_attention(&q, &k, &v, 2),
+            Err(TensorError::InvalidShape { .. })
+        ));
     }
 
     #[test]
-    fn test_mha_causal_seq_mismatch_rejected() { // CHANGED
+    fn test_mha_causal_seq_mismatch_rejected() {
+        // CHANGED
         let q = Tensor::from_vec(vec![1.0_f32; 4], vec![2, 2]).unwrap();
         let k = Tensor::from_vec(vec![1.0_f32; 6], vec![3, 2]).unwrap();
         let v = Tensor::from_vec(vec![1.0_f32; 6], vec![3, 2]).unwrap();

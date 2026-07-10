@@ -114,7 +114,7 @@ impl Arena {
     /// Panics in debug builds if `n == 0`.
     pub fn alloc(&mut self, n: usize) -> Vec<f32> {
         debug_assert!(n > 0, "Arena::alloc: n must be > 0");
-        self.alloc_count          += 1;
+        self.alloc_count += 1;
         self.total_elements_allocated += n as u64;
 
         if self.cursor + n <= self.buf.len() {
@@ -143,7 +143,7 @@ impl Arena {
         if n == 0 || self.cursor + n > self.buf.len() {
             return None;
         }
-        self.alloc_count             += 1;
+        self.alloc_count += 1;
         self.total_elements_allocated += n as u64;
         let slice = self.buf[self.cursor..self.cursor + n].to_vec();
         self.cursor += n;

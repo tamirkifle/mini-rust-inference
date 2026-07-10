@@ -19,7 +19,9 @@
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 
-use llm_engine::ops::matmul::{matmul_blocked, matmul_int8_from_f32, matmul_int8_parallel, matmul_naive, matmul_parallel};
+use llm_engine::ops::matmul::{
+    matmul_blocked, matmul_int8_from_f32, matmul_int8_parallel, matmul_naive, matmul_parallel,
+};
 use llm_engine::quant::int8::per_channel::{quantize_per_channel, QuantizedMatrix};
 use llm_engine::quant::int8::symmetric::quantize_symmetric;
 use llm_engine::tensor::Tensor;
@@ -84,7 +86,7 @@ fn bench_int8_matmul(c: &mut Criterion) {
 
     for &size in &[128usize, 512, 1024] {
         let act = make_f32(size, size);
-        let wq  = make_qmatrix(size, size);
+        let wq = make_qmatrix(size, size);
         let flops = (2 * size * size * size) as u64;
         group.throughput(Throughput::Elements(flops));
 
@@ -124,12 +126,12 @@ fn bench_projection(c: &mut Criterion) {
     let mut group = c.benchmark_group("matmul_projection");
 
     // seq_len=16 (decode batch), hidden=512 (scaled-down proxy for 4096)
-    let seq_len  = 16_usize;
-    let hidden   = 512_usize;
-    let ffn_dim  = 1024_usize; // scaled proxy for 11008
+    let seq_len = 16_usize;
+    let hidden = 512_usize;
+    let ffn_dim = 1024_usize; // scaled proxy for 11008
 
-    let act      = make_f32(seq_len, hidden);
-    let wq_ff    = make_qmatrix(ffn_dim, hidden);
+    let act = make_f32(seq_len, hidden);
+    let wq_ff = make_qmatrix(ffn_dim, hidden);
     let w_ff_f32 = make_f32(ffn_dim, hidden);
 
     group.throughput(Throughput::Elements(
@@ -147,5 +149,10 @@ fn bench_projection(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_f32_matmul, bench_int8_matmul, bench_projection);
+criterion_group!(
+    benches,
+    bench_f32_matmul,
+    bench_int8_matmul,
+    bench_projection
+);
 criterion_main!(benches);

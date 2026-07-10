@@ -71,7 +71,10 @@ pub fn matmul_int8(
         return Err(TensorError::InvalidShape {
             reason: format!(
                 "matmul_int8: act_q.len()={} != m*k={}*{}={}",
-                act_q.len(), m, k, m * k
+                act_q.len(),
+                m,
+                k,
+                m * k
             ),
         });
     }
@@ -107,15 +110,13 @@ pub fn matmul_int8(
 ///
 /// [`TensorError::InvalidShape`] if `input` is not 2-D or K mismatches weights.
 #[must_use = "returns a new tensor"]
-pub fn matmul_int8_from_f32(
-    input: &Tensor<f32>,
-    weights: &QuantizedMatrix,
-) -> Result<Tensor<f32>> {
+pub fn matmul_int8_from_f32(input: &Tensor<f32>, weights: &QuantizedMatrix) -> Result<Tensor<f32>> {
     if input.ndim() != 2 {
         return Err(TensorError::InvalidShape {
             reason: format!(
                 "matmul_int8_from_f32: input must be 2-D, got {}D (shape {:?})",
-                input.ndim(), input.dims()
+                input.ndim(),
+                input.dims()
             ),
         });
     }
@@ -156,10 +157,13 @@ mod tests {
     const REL_TOL: f32 = 0.02;
 
     fn max_rel_err(a: &[f32], b: &[f32]) -> f32 {
-        a.iter().zip(b).map(|(x, y)| {
-            let denom = x.abs().max(y.abs()).max(1e-3);
-            (x - y).abs() / denom
-        }).fold(0.0_f32, f32::max)
+        a.iter()
+            .zip(b)
+            .map(|(x, y)| {
+                let denom = x.abs().max(y.abs()).max(1e-3);
+                (x - y).abs() / denom
+            })
+            .fold(0.0_f32, f32::max)
     }
 
     // ── shape and basic correctness ───────────────────────────────────────
@@ -260,7 +264,7 @@ mod tests {
         let (act_q, act_scale) = quantize_symmetric(&inp);
 
         let via_wrapper = matmul_int8_from_f32(&input, &qw).unwrap();
-        let via_direct  = matmul_int8(&act_q, act_scale, &qw, 2).unwrap();
+        let via_direct = matmul_int8(&act_q, act_scale, &qw, 2).unwrap();
 
         assert_eq!(via_wrapper.as_slice(), via_direct.as_slice());
     }
@@ -278,8 +282,8 @@ mod tests {
         let qw = quantize_per_channel(&w, 3, 64);
 
         // Should not panic, and should match the contiguous equivalent
-        let out_nc  = matmul_int8_from_f32(&input_nc, &qw).unwrap();
-        let out_c   = matmul_int8_from_f32(&input_nc.contiguous(), &qw).unwrap();
+        let out_nc = matmul_int8_from_f32(&input_nc, &qw).unwrap();
+        let out_c = matmul_int8_from_f32(&input_nc.contiguous(), &qw).unwrap();
         assert_eq!(out_nc.as_slice(), out_c.as_slice());
     }
 
@@ -342,6 +346,9 @@ mod tests {
         let expected = 127.0_f32 * 127.0 * k as f32;
         let got = out.as_slice()[0];
         let rel = (got - expected).abs() / expected;
-        assert!(rel < 0.02, "rel err {rel:.4}, got={got}, expected={expected}");
+        assert!(
+            rel < 0.02,
+            "rel err {rel:.4}, got={got}, expected={expected}"
+        );
     }
 }

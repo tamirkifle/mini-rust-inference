@@ -93,11 +93,17 @@ impl Q8_0WeightMatrix {
                 reason: format!(
                     "Q8_0WeightMatrix: data.len()={} != expected {} \
                      (n_out={n_out}, n_blocks={n_blocks}, block_size={Q8_0_BLOCK_SIZE})",
-                    data.len(), expected
+                    data.len(),
+                    expected
                 ),
             });
         }
-        Ok(Self { data, n_out, k_in, n_blocks })
+        Ok(Self {
+            data,
+            n_out,
+            k_in,
+            n_blocks,
+        })
     }
 
     /// Build a `Q8_0WeightMatrix` by quantizing a 2-D `Tensor<f32>`.
@@ -119,7 +125,7 @@ impl Q8_0WeightMatrix {
             });
         }
         let n_out = t.dims()[0];
-        let k_in  = t.dims()[1];
+        let k_in = t.dims()[1];
         if k_in % Q8_0_BLOCK_ELEMENTS != 0 {
             return Err(TensorError::InvalidShape {
                 reason: format!(
@@ -143,7 +149,12 @@ impl Q8_0WeightMatrix {
                 data.extend_from_slice(&encoded);
             }
         }
-        Ok(Self { data, n_out, k_in, n_blocks })
+        Ok(Self {
+            data,
+            n_out,
+            k_in,
+            n_blocks,
+        })
     }
 
     // ── accessors ─────────────────────────────────────────────────────────────
@@ -173,9 +184,9 @@ impl Q8_0WeightMatrix {
         let mut out = vec![0.0_f32; self.n_out * self.k_in];
         for n in 0..self.n_out {
             for b in 0..self.n_blocks {
-                let scale  = self.block_scale(n, b);
+                let scale = self.block_scale(n, b);
                 let quants = self.block_quants(n, b);
-                let base   = n * self.k_in + b * Q8_0_BLOCK_ELEMENTS;
+                let base = n * self.k_in + b * Q8_0_BLOCK_ELEMENTS;
                 for k in 0..Q8_0_BLOCK_ELEMENTS {
                     out[base + k] = f32::from(quants[k] as i8) * scale;
                 }
@@ -215,28 +226,26 @@ impl Q8_0WeightMatrix {
 ///
 /// [`TensorError::InvalidShape`] if dimensions are inconsistent.
 #[must_use = "returns a new tensor"]
-pub fn matmul_q8_0_direct(
-    input:   &Tensor<f32>,
-    weights: &Q8_0WeightMatrix,
-) -> Result<Tensor<f32>> {
+pub fn matmul_q8_0_direct(input: &Tensor<f32>, weights: &Q8_0WeightMatrix) -> Result<Tensor<f32>> {
     if input.ndim() != 2 {
         return Err(TensorError::InvalidShape {
             reason: format!(
                 "matmul_q8_0_direct: input must be 2-D, got {}D (shape {:?})",
-                input.ndim(), input.dims()
+                input.ndim(),
+                input.dims()
             ),
         });
     }
-    let m  = input.dims()[0];
-    let k  = input.dims()[1];
+    let m = input.dims()[0];
+    let k = input.dims()[1];
     if k != weights.k_in {
         return Err(TensorError::ShapeMismatch {
             expected: vec![m, weights.k_in],
-            got:      vec![m, k],
+            got: vec![m, k],
         });
     }
-    let n         = weights.n_out;
-    let n_blocks  = weights.n_blocks;
+    let n = weights.n_out;
+    let n_blocks = weights.n_blocks;
 
     // Ensure contiguous before slicing rows.
     let input_c: Cow<Tensor<f32>> = if input.is_contiguous() {
@@ -246,7 +255,7 @@ pub fn matmul_q8_0_direct(
     };
 
     let input_data = input_c.as_slice();
-    let mut out    = vec![0.0_f32; m * n];
+    let mut out = vec![0.0_f32; m * n];
 
     for m_i in 0..m {
         let act_row = &input_data[m_i * k..(m_i + 1) * k];
@@ -258,15 +267,14 @@ pub fn matmul_q8_0_direct(
             let mut acc = 0.0_f32;
 
             for blk in 0..n_blocks {
-                let w_scale  = weights.block_scale(n_i, blk);
+                let w_scale = weights.block_scale(n_i, blk);
                 let w_quants = weights.block_quants(n_i, blk);
 
                 // INT8 dot product — accumulate in i32 to prevent overflow.
-                let base_k  = blk * Q8_0_BLOCK_ELEMENTS;
+                let base_k = blk * Q8_0_BLOCK_ELEMENTS;
                 let mut dot = 0_i32;
                 for k_i in 0..Q8_0_BLOCK_ELEMENTS {
-                    dot += i32::from(act_q[base_k + k_i])
-                         * i32::from(w_quants[k_i] as i8);
+                    dot += i32::from(act_q[base_k + k_i]) * i32::from(w_quants[k_i] as i8);
                 }
 
                 // Rescale: activation scale × block weight scale.
@@ -292,10 +300,13 @@ mod tests {
     const REL_TOL: f32 = 0.03;
 
     fn max_rel_err(a: &[f32], b: &[f32]) -> f32 {
-        a.iter().zip(b).map(|(x, y)| {
-            let denom = x.abs().max(y.abs()).max(1e-3);
-            (x - y).abs() / denom
-        }).fold(0.0_f32, f32::max)
+        a.iter()
+            .zip(b)
+            .map(|(x, y)| {
+                let denom = x.abs().max(y.abs()).max(1e-3);
+                (x - y).abs() / denom
+            })
+            .fold(0.0_f32, f32::max)
     }
 
     // ── from_raw_bytes validation ──────────────────────────────────────────
@@ -303,7 +314,7 @@ mod tests {
     #[test]
     fn from_raw_bytes_correct_size_accepted() {
         // n_out=2, k_in=32 → 2 rows × 1 block × 34 bytes = 68 bytes
-        let data = vec![0u8; 2 * 1 * 34];
+        let data = vec![0u8; 2 * 34];
         assert!(Q8_0WeightMatrix::from_raw_bytes(data, 2, 32).is_ok());
     }
 
@@ -383,8 +394,8 @@ mod tests {
         let w: Vec<f32> = (0..128).map(|i| (i as f32) * 0.03 - 2.0).collect();
         let inp: Vec<f32> = (0..64).map(|i| (i as f32) * 0.05 - 1.6).collect();
 
-        let wt  = Tensor::from_vec(w.clone(), vec![4, 32]).unwrap();
-        let qw  = Q8_0WeightMatrix::from_f32_tensor(&wt).unwrap();
+        let wt = Tensor::from_vec(w.clone(), vec![4, 32]).unwrap();
+        let qw = Q8_0WeightMatrix::from_f32_tensor(&wt).unwrap();
         let inp_t = Tensor::from_vec(inp, vec![2, 32]).unwrap();
 
         // f32 reference via dequantize_all + naive matmul
@@ -393,18 +404,20 @@ mod tests {
 
         let direct = matmul_q8_0_direct(&inp_t, &qw).unwrap();
         let mre = max_rel_err(direct.as_slice(), ref_t.as_slice());
-        assert!(mre < REL_TOL,
-            "max rel error {mre:.4} >= tolerance {REL_TOL}");
+        assert!(
+            mre < REL_TOL,
+            "max rel error {mre:.4} >= tolerance {REL_TOL}"
+        );
     }
 
     #[test]
     fn matches_dequant_naive_multi_block() {
         // [3, 128] × [6, 128]^T → [3, 6]  (4 blocks per row)
-        let w: Vec<f32>   = (0..768).map(|i| (i as f32) * 0.01 - 3.84).collect();
+        let w: Vec<f32> = (0..768).map(|i| (i as f32) * 0.01 - 3.84).collect();
         let inp: Vec<f32> = (0..384).map(|i| (i as f32) * 0.02 - 3.84).collect();
 
-        let wt    = Tensor::from_vec(w.clone(), vec![6, 128]).unwrap();
-        let qw    = Q8_0WeightMatrix::from_f32_tensor(&wt).unwrap();
+        let wt = Tensor::from_vec(w.clone(), vec![6, 128]).unwrap();
+        let qw = Q8_0WeightMatrix::from_f32_tensor(&wt).unwrap();
         let inp_t = Tensor::from_vec(inp, vec![3, 128]).unwrap();
 
         let w_deq = Tensor::from_vec(qw.dequantize_all(), vec![6, 128]).unwrap();
@@ -412,22 +425,23 @@ mod tests {
         let direct = matmul_q8_0_direct(&inp_t, &qw).unwrap();
 
         let mre = max_rel_err(direct.as_slice(), ref_t.as_slice());
-        assert!(mre < REL_TOL,
-            "max rel error {mre:.4} >= tolerance {REL_TOL}");
+        assert!(
+            mre < REL_TOL,
+            "max rel error {mre:.4} >= tolerance {REL_TOL}"
+        );
     }
 
     #[test]
     fn single_row_single_output_dot_product() {
         // 1×32 input all-ones, 1×32 weight all-ones → dot = 32
-        let wt  = Tensor::from_vec(vec![1.0f32; 32], vec![1, 32]).unwrap();
-        let qw  = Q8_0WeightMatrix::from_f32_tensor(&wt).unwrap();
+        let wt = Tensor::from_vec(vec![1.0f32; 32], vec![1, 32]).unwrap();
+        let qw = Q8_0WeightMatrix::from_f32_tensor(&wt).unwrap();
         let inp = Tensor::from_vec(vec![0.5f32; 32], vec![1, 32]).unwrap();
         let out = matmul_q8_0_direct(&inp, &qw).unwrap();
         assert_eq!(out.dims(), &[1, 1]);
         // Expected: 32 × 0.5 × 1.0 = 16.0; allow quantization error
         let got = out.as_slice()[0];
-        assert!((got - 16.0).abs() < 1.0,
-            "expected ~16.0, got {got}");
+        assert!((got - 16.0).abs() < 1.0, "expected ~16.0, got {got}");
     }
 
     // ── non-contiguous input ───────────────────────────────────────────────
@@ -440,11 +454,11 @@ mod tests {
         assert!(!inp_nc.is_contiguous());
 
         let w: Vec<f32> = (0..192).map(|i| (i as f32) * 0.02 - 2.0).collect();
-        let wt  = Tensor::from_vec(w, vec![3, 64]).unwrap();
-        let qw  = Q8_0WeightMatrix::from_f32_tensor(&wt).unwrap();
+        let wt = Tensor::from_vec(w, vec![3, 64]).unwrap();
+        let qw = Q8_0WeightMatrix::from_f32_tensor(&wt).unwrap();
 
         let out_nc = matmul_q8_0_direct(&inp_nc, &qw).unwrap();
-        let out_c  = matmul_q8_0_direct(&inp_nc.contiguous(), &qw).unwrap();
+        let out_c = matmul_q8_0_direct(&inp_nc.contiguous(), &qw).unwrap();
         // Results should be identical (same data, just laid out differently).
         assert_eq!(out_nc.as_slice(), out_c.as_slice());
     }
@@ -464,13 +478,13 @@ mod tests {
 
     #[test]
     fn error_on_k_mismatch() {
-        let wt  = Tensor::from_vec(vec![0.0f32; 64], vec![2, 32]).unwrap(); // k_in=32
-        let qw  = Q8_0WeightMatrix::from_f32_tensor(&wt).unwrap();
+        let wt = Tensor::from_vec(vec![0.0f32; 64], vec![2, 32]).unwrap(); // k_in=32
+        let qw = Q8_0WeightMatrix::from_f32_tensor(&wt).unwrap();
         let inp = Tensor::from_vec(vec![1.0f32; 64], vec![2, 32]).unwrap();
         let _ = matmul_q8_0_direct(&inp, &qw).unwrap(); // correct k — should pass
 
-        let wt2  = Tensor::from_vec(vec![0.0f32; 128], vec![2, 64]).unwrap(); // k_in=64
-        let qw2  = Q8_0WeightMatrix::from_f32_tensor(&wt2).unwrap();
+        let wt2 = Tensor::from_vec(vec![0.0f32; 128], vec![2, 64]).unwrap(); // k_in=64
+        let qw2 = Q8_0WeightMatrix::from_f32_tensor(&wt2).unwrap();
         let inp2 = Tensor::from_vec(vec![1.0f32; 32], vec![1, 32]).unwrap(); // k=32 ≠ 64
         assert!(matches!(
             matmul_q8_0_direct(&inp2, &qw2),
@@ -482,14 +496,14 @@ mod tests {
 
     #[test]
     fn no_nan_or_inf_with_varied_inputs() {
-        let w: Vec<f32>   = (0..1024).map(|i| (i as f32) * 0.01 - 5.12).collect();
+        let w: Vec<f32> = (0..1024).map(|i| (i as f32) * 0.01 - 5.12).collect();
         let inp: Vec<f32> = (0..512).map(|i| (i as f32) * 0.02 - 5.12).collect();
-        let wt  = Tensor::from_vec(w, vec![32, 32]).unwrap();
-        let qw  = Q8_0WeightMatrix::from_f32_tensor(&wt).unwrap();
+        let wt = Tensor::from_vec(w, vec![32, 32]).unwrap();
+        let qw = Q8_0WeightMatrix::from_f32_tensor(&wt).unwrap();
         let inp = Tensor::from_vec(inp, vec![16, 32]).unwrap();
         let out = matmul_q8_0_direct(&inp, &qw).unwrap();
         for &v in out.as_slice() {
-            assert!(!v.is_nan(),      "NaN in output");
+            assert!(!v.is_nan(), "NaN in output");
             assert!(!v.is_infinite(), "Inf in output");
         }
     }

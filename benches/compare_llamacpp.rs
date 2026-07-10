@@ -47,13 +47,13 @@ const N_LAYERS: usize = 32;
 
 // Projection sizes (rows × cols): Q, K, V, O, gate, up, down
 const PROJ_PARAMS: &[(usize, usize)] = &[
-    (D_MODEL, D_MODEL),  // Q
-    (D_MODEL, D_MODEL),  // K
-    (D_MODEL, D_MODEL),  // V
-    (D_MODEL, D_MODEL),  // O
-    (D_FFN,   D_MODEL),  // gate
-    (D_FFN,   D_MODEL),  // up
-    (D_MODEL, D_FFN),    // down
+    (D_MODEL, D_MODEL), // Q
+    (D_MODEL, D_MODEL), // K
+    (D_MODEL, D_MODEL), // V
+    (D_MODEL, D_MODEL), // O
+    (D_FFN, D_MODEL),   // gate
+    (D_FFN, D_MODEL),   // up
+    (D_MODEL, D_FFN),   // down
 ];
 
 /// Total f32 bytes for all projections in one transformer layer.
@@ -87,21 +87,43 @@ fn make_int8_proj(rows: usize, cols: usize) -> QuantizedMatrix {
 /// Print the 7B-scale memory extrapolation once at bench startup.
 fn print_7b_summary() {
     let f32_per_layer = layer_f32_bytes();
-    let i8_per_layer  = layer_int8_bytes();
-    let f32_total     = f32_per_layer * N_LAYERS;
-    let i8_total      = i8_per_layer  * N_LAYERS;
-    let ratio         = f32_total as f64 / i8_total as f64;
+    let i8_per_layer = layer_int8_bytes();
+    let f32_total = f32_per_layer * N_LAYERS;
+    let i8_total = i8_per_layer * N_LAYERS;
+    let ratio = f32_total as f64 / i8_total as f64;
 
     println!("\n╔══════════════════════════════════════════════════════╗");
     println!("║          Memory Footprint — Llama-7B at Scale        ║");
     println!("╠══════════════════════════════════════════════════════╣");
     println!("║  dtype   per-layer     total ({N_LAYERS} layers)            ║");
-    println!("║  f32     {:<12}  {:<28} ║", format_bytes(f32_per_layer), format_bytes(f32_total));
-    println!("║  INT8    {:<12}  {:<28} ║", format_bytes(i8_per_layer),  format_bytes(i8_total));
+    println!(
+        "║  f32     {:<12}  {:<28} ║",
+        format_bytes(f32_per_layer),
+        format_bytes(f32_total)
+    );
+    println!(
+        "║  INT8    {:<12}  {:<28} ║",
+        format_bytes(i8_per_layer),
+        format_bytes(i8_total)
+    );
     println!("║  ratio   {ratio:.1}×                                       ║");
     println!("╚══════════════════════════════════════════════════════╝");
-    println!("  f32 fits in 16 GB: {}", if f32_total < 16 * 1024 * 1024 * 1024 { "yes" } else { "no" });
-    println!("  INT8 fits in  8 GB: {}", if i8_total  <  8 * 1024 * 1024 * 1024 { "yes" } else { "no" });
+    println!(
+        "  f32 fits in 16 GB: {}",
+        if f32_total < 16 * 1024 * 1024 * 1024 {
+            "yes"
+        } else {
+            "no"
+        }
+    );
+    println!(
+        "  INT8 fits in  8 GB: {}",
+        if i8_total < 8 * 1024 * 1024 * 1024 {
+            "yes"
+        } else {
+            "no"
+        }
+    );
     println!();
 }
 
@@ -160,9 +182,14 @@ fn bench_memory_efficiency(c: &mut Criterion) {
 
     // f32 slice
     {
-        let rss_before  = query_rss();
+        let rss_before = query_rss();
         let f32_layers: Vec<Vec<Tensor<f32>>> = (0..N_BENCH_LAYERS)
-            .map(|_| PROJ_PARAMS.iter().map(|&(r, c)| make_f32_proj(r, c)).collect())
+            .map(|_| {
+                PROJ_PARAMS
+                    .iter()
+                    .map(|&(r, c)| make_f32_proj(r, c))
+                    .collect()
+            })
             .collect();
         let rss_after = query_rss();
         println!(
@@ -171,11 +198,13 @@ fn bench_memory_efficiency(c: &mut Criterion) {
             format_bytes(rss_after.saturating_sub(rss_before)),
         );
 
-        group.throughput(Throughput::Bytes((layer_f32_bytes() * N_BENCH_LAYERS) as u64));
+        group.throughput(Throughput::Bytes(
+            (layer_f32_bytes() * N_BENCH_LAYERS) as u64,
+        ));
         group.bench_function(format!("f32_{N_BENCH_LAYERS}layers"), |bench| {
             bench.iter(|| {
-                let out = matmul_parallel(&act, &f32_layers[0][0].transpose(0, 1).unwrap())
-                    .unwrap();
+                let out =
+                    matmul_parallel(&act, &f32_layers[0][0].transpose(0, 1).unwrap()).unwrap();
                 std::hint::black_box(out);
             });
         });
@@ -184,9 +213,14 @@ fn bench_memory_efficiency(c: &mut Criterion) {
 
     // INT8 slice
     {
-        let rss_before  = query_rss();
+        let rss_before = query_rss();
         let i8_layers: Vec<Vec<QuantizedMatrix>> = (0..N_BENCH_LAYERS)
-            .map(|_| PROJ_PARAMS.iter().map(|&(r, c)| make_int8_proj(r, c)).collect())
+            .map(|_| {
+                PROJ_PARAMS
+                    .iter()
+                    .map(|&(r, c)| make_int8_proj(r, c))
+                    .collect()
+            })
             .collect();
         let rss_after = query_rss();
         println!(
@@ -195,7 +229,9 @@ fn bench_memory_efficiency(c: &mut Criterion) {
             format_bytes(rss_after.saturating_sub(rss_before)),
         );
 
-        group.throughput(Throughput::Bytes((layer_int8_bytes() * N_BENCH_LAYERS) as u64));
+        group.throughput(Throughput::Bytes(
+            (layer_int8_bytes() * N_BENCH_LAYERS) as u64,
+        ));
         group.bench_function(format!("int8_{N_BENCH_LAYERS}layers"), |bench| {
             bench.iter(|| {
                 let out = matmul_int8_from_f32(&act, &i8_layers[0][0]).unwrap();

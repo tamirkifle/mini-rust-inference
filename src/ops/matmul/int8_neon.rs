@@ -55,10 +55,10 @@ mod neon_impl {
     /// NEON is mandatory on all aarch64 targets.
     #[target_feature(enable = "neon")]
     pub(super) unsafe fn dot_i8(a: &[i8], b: &[i8]) -> i32 {
-        let n       = a.len(); // caller guarantees a.len() == b.len()
-        let chunks  = n / 16;  // 16 i8 per 128-bit NEON register
-        let ap      = a.as_ptr();
-        let bp      = b.as_ptr();
+        let n = a.len(); // caller guarantees a.len() == b.len()
+        let chunks = n / 16; // 16 i8 per 128-bit NEON register
+        let ap = a.as_ptr();
+        let bp = b.as_ptr();
         let mut acc = vdupq_n_s32(0);
 
         for i in 0..chunks {
@@ -101,7 +101,10 @@ mod neon_impl {
 #[allow(dead_code)] // only reached on non-aarch64 targets
 #[inline]
 fn dot_i8_scalar(a: &[i8], b: &[i8]) -> i32 {
-    a.iter().zip(b).map(|(&x, &y)| i32::from(x) * i32::from(y)).sum()
+    a.iter()
+        .zip(b)
+        .map(|(&x, &y)| i32::from(x) * i32::from(y))
+        .sum()
 }
 
 // ── public API ────────────────────────────────────────────────────────────
@@ -165,7 +168,10 @@ pub fn matmul_int8_neon(
         return Err(TensorError::InvalidShape {
             reason: format!(
                 "matmul_int8_neon: act_q.len()={} != m*k={}*{}={}",
-                act_q.len(), m, k, m * k
+                act_q.len(),
+                m,
+                k,
+                m * k
             ),
         });
     }
@@ -176,7 +182,7 @@ pub fn matmul_int8_neon(
         let a_row = &act_q[m_i * k..(m_i + 1) * k];
         for n_i in 0..n {
             let w_row = weights.row(n_i);
-            let acc   = dot_i8_neon(a_row, w_row);
+            let acc = dot_i8_neon(a_row, w_row);
             out[m_i * n + n_i] = acc as f32 * act_scale * weights.scales[n_i];
         }
     }
@@ -259,8 +265,12 @@ mod tests {
     #[test]
     fn dot_matches_scalar_k_128() {
         let k = 128_usize;
-        let a: Vec<i8> = (0..k).map(|i| ((i * 7 + 3) as i8).wrapping_sub(64)).collect();
-        let b: Vec<i8> = (0..k).map(|i| ((i * 11 + 1) as i8).wrapping_sub(64)).collect();
+        let a: Vec<i8> = (0..k)
+            .map(|i| ((i * 7 + 3) as i8).wrapping_sub(64))
+            .collect();
+        let b: Vec<i8> = (0..k)
+            .map(|i| ((i * 11 + 1) as i8).wrapping_sub(64))
+            .collect();
         assert_eq!(dot_i8_neon(&a, &b), dot_i8_scalar(&a, &b));
     }
 
@@ -269,10 +279,13 @@ mod tests {
     const REL_TOL: f32 = 0.02;
 
     fn max_rel_err(got: &[f32], expected: &[f32]) -> f32 {
-        got.iter().zip(expected).map(|(g, e)| {
-            let denom = g.abs().max(e.abs()).max(1e-3);
-            (g - e).abs() / denom
-        }).fold(0.0_f32, f32::max)
+        got.iter()
+            .zip(expected)
+            .map(|(g, e)| {
+                let denom = g.abs().max(e.abs()).max(1e-3);
+                (g - e).abs() / denom
+            })
+            .fold(0.0_f32, f32::max)
     }
 
     #[test]
@@ -295,7 +308,7 @@ mod tests {
         let inp: Vec<f32> = (0..m_rows * k).map(|i| (i as f32) * 0.05 - 1.6).collect();
         let qw = quantize_per_channel(&w, n_out, k);
         let (act_q, act_scale) = quantize_symmetric(&inp);
-        let neon_out   = matmul_int8_neon(&act_q, act_scale, &qw, m_rows).unwrap();
+        let neon_out = matmul_int8_neon(&act_q, act_scale, &qw, m_rows).unwrap();
         let scalar_out = matmul_int8(&act_q, act_scale, &qw, m_rows).unwrap();
         let mre = max_rel_err(neon_out.as_slice(), scalar_out.as_slice());
         assert!(mre < 1e-6, "NEON differs from scalar by {mre:.2e}");

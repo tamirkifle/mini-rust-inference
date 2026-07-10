@@ -158,12 +158,12 @@ impl<'a> TensorExtractor<'a> {
         }
 
         // Get raw tensor data
-        let raw_data = self
-            .loader
-            .tensor_data_for(info)
-            .ok_or_else(|| GgufError::TensorDataUnavailable {
-                name: info.name().to_string(),
-            })?;
+        let raw_data =
+            self.loader
+                .tensor_data_for(info)
+                .ok_or_else(|| GgufError::TensorDataUnavailable {
+                    name: info.name().to_string(),
+                })?;
 
         // Calculate expected size
         let numel = info.numel() as usize;
@@ -303,12 +303,12 @@ impl<'a> TensorExtractor<'a> {
         }
 
         // Get raw tensor data
-        let raw_data = self
-            .loader
-            .tensor_data_for(info)
-            .ok_or_else(|| GgufError::TensorDataUnavailable {
-                name: info.name().to_string(),
-            })?;
+        let raw_data =
+            self.loader
+                .tensor_data_for(info)
+                .ok_or_else(|| GgufError::TensorDataUnavailable {
+                    name: info.name().to_string(),
+                })?;
 
         // Calculate expected size (F16 = 2 bytes per element)
         let numel = info.numel() as usize;
@@ -449,12 +449,12 @@ impl<'a> TensorExtractor<'a> {
         }
 
         // Get raw tensor data
-        let raw_data = self
-            .loader
-            .tensor_data_for(info)
-            .ok_or_else(|| GgufError::TensorDataUnavailable {
-                name: info.name().to_string(),
-            })?;
+        let raw_data =
+            self.loader
+                .tensor_data_for(info)
+                .ok_or_else(|| GgufError::TensorDataUnavailable {
+                    name: info.name().to_string(),
+                })?;
 
         // Calculate expected size
         let numel = info.numel() as usize;
@@ -606,12 +606,12 @@ impl<'a> TensorExtractor<'a> {
         }
 
         // Get raw tensor data
-        let raw_data = self
-            .loader
-            .tensor_data_for(info)
-            .ok_or_else(|| GgufError::TensorDataUnavailable {
-                name: info.name().to_string(),
-            })?;
+        let raw_data =
+            self.loader
+                .tensor_data_for(info)
+                .ok_or_else(|| GgufError::TensorDataUnavailable {
+                    name: info.name().to_string(),
+                })?;
 
         // Calculate expected size
         let numel = info.numel() as usize;
@@ -834,8 +834,7 @@ pub fn extract_f32_into(bytes: &[u8], buffer: &mut Vec<f32>) -> Result<()> {
     if is_aligned && cfg!(target_endian = "little") {
         // Fast path: aligned data on little-endian system
         // SAFETY: We verified alignment and length
-        let f32_slice =
-            unsafe { std::slice::from_raw_parts(ptr.cast::<f32>(), count) };
+        let f32_slice = unsafe { std::slice::from_raw_parts(ptr.cast::<f32>(), count) };
         buffer.extend_from_slice(f32_slice);
     } else {
         // Slow path: handle unaligned or big-endian systems
@@ -1118,15 +1117,8 @@ mod tests {
         use super::super::quantization::f32_to_f16;
 
         // Create F16 bytes for [1.0, 2.0, 0.5]
-        let f16_values = vec![
-            f32_to_f16(1.0),
-            f32_to_f16(2.0),
-            f32_to_f16(0.5),
-        ];
-        let bytes: Vec<u8> = f16_values
-            .iter()
-            .flat_map(|v| v.to_le_bytes())
-            .collect();
+        let f16_values = [f32_to_f16(1.0), f32_to_f16(2.0), f32_to_f16(0.5)];
+        let bytes: Vec<u8> = f16_values.iter().flat_map(|v| v.to_le_bytes()).collect();
 
         let extracted = extract_f16_as_f32(&bytes).unwrap();
 
@@ -1148,10 +1140,7 @@ mod tests {
             constants::F16_NEG_INFINITY,
             constants::F16_NAN,
         ];
-        let bytes: Vec<u8> = f16_values
-            .iter()
-            .flat_map(|v| v.to_le_bytes())
-            .collect();
+        let bytes: Vec<u8> = f16_values.iter().flat_map(|v| v.to_le_bytes()).collect();
 
         let extracted = extract_f16_as_f32(&bytes).unwrap();
 
@@ -1188,13 +1177,8 @@ mod tests {
 
         // Test with a larger batch
         let count = 10000;
-        let f16_values: Vec<u16> = (0..count)
-            .map(|i| f32_to_f16((i as f32) * 0.01))
-            .collect();
-        let bytes: Vec<u8> = f16_values
-            .iter()
-            .flat_map(|v| v.to_le_bytes())
-            .collect();
+        let f16_values: Vec<u16> = (0..count).map(|i| f32_to_f16((i as f32) * 0.01)).collect();
+        let bytes: Vec<u8> = f16_values.iter().flat_map(|v| v.to_le_bytes()).collect();
 
         let extracted = extract_f16_as_f32(&bytes).unwrap();
 

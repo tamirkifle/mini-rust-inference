@@ -33,7 +33,7 @@ use crate::tensor::{Result, TensorError};
 /// stored: the **next** write should go at index `pos`.
 #[derive(Debug, Clone)]
 pub struct CachePosition {
-    pos:         usize,
+    pos: usize,
     max_seq_len: usize,
 }
 
@@ -41,26 +41,37 @@ impl CachePosition {
     /// Create a new `CachePosition` starting at 0.
     #[must_use]
     pub fn new(max_seq_len: usize) -> Self {
-        Self { pos: 0, max_seq_len }
+        Self {
+            pos: 0,
+            max_seq_len,
+        }
     }
 
     // ── readers ───────────────────────────────────────────────────────────
 
     /// Current sequence position (tokens already in cache).
     #[must_use]
-    pub fn current(&self) -> usize { self.pos }
+    pub fn current(&self) -> usize {
+        self.pos
+    }
 
     /// Maximum number of tokens this cache session can hold.
     #[must_use]
-    pub fn max_seq_len(&self) -> usize { self.max_seq_len }
+    pub fn max_seq_len(&self) -> usize {
+        self.max_seq_len
+    }
 
     /// `true` if the cache is at capacity — no more tokens can be added.
     #[must_use]
-    pub fn is_full(&self) -> bool { self.pos >= self.max_seq_len }
+    pub fn is_full(&self) -> bool {
+        self.pos >= self.max_seq_len
+    }
 
     /// Number of token positions remaining before the cache is full.
     #[must_use]
-    pub fn remaining(&self) -> usize { self.max_seq_len.saturating_sub(self.pos) }
+    pub fn remaining(&self) -> usize {
+        self.max_seq_len.saturating_sub(self.pos)
+    }
 
     // ── mutation ──────────────────────────────────────────────────────────
 
@@ -118,9 +129,9 @@ mod tests {
     #[test]
     fn test_cache_position_initial_state() {
         let p = CachePosition::new(128);
-        assert_eq!(p.current(),     0);
+        assert_eq!(p.current(), 0);
         assert_eq!(p.max_seq_len(), 128);
-        assert_eq!(p.remaining(),   128);
+        assert_eq!(p.remaining(), 128);
         assert!(!p.is_full());
     }
 
@@ -128,7 +139,7 @@ mod tests {
     fn test_cache_position_advance() {
         let mut p = CachePosition::new(64);
         p.advance(10).unwrap();
-        assert_eq!(p.current(),   10);
+        assert_eq!(p.current(), 10);
         assert_eq!(p.remaining(), 54);
         assert!(!p.is_full());
     }
@@ -160,7 +171,7 @@ mod tests {
         let mut p = CachePosition::new(32);
         p.advance(20).unwrap();
         p.reset();
-        assert_eq!(p.current(),   0);
+        assert_eq!(p.current(), 0);
         assert_eq!(p.remaining(), 32);
         assert!(!p.is_full());
     }
@@ -193,10 +204,7 @@ mod tests {
     #[test]
     fn test_cache_position_set_overflow_rejected() {
         let mut p = CachePosition::new(64);
-        assert!(matches!(
-            p.set(65),
-            Err(TensorError::InvalidShape { .. })
-        ));
+        assert!(matches!(p.set(65), Err(TensorError::InvalidShape { .. })));
     }
 
     #[test]

@@ -53,7 +53,8 @@ pub fn matvec(w: &Tensor<f32>, x: &Tensor<f32>) -> Result<Tensor<f32>> {
         return Err(TensorError::InvalidShape {
             reason: format!(
                 "matvec: `w` must be 2-D, got {}D (shape {:?})",
-                w.ndim(), w.dims()
+                w.ndim(),
+                w.dims()
             ),
         });
     }
@@ -61,7 +62,8 @@ pub fn matvec(w: &Tensor<f32>, x: &Tensor<f32>) -> Result<Tensor<f32>> {
         return Err(TensorError::InvalidShape {
             reason: format!(
                 "matvec: `x` must be 1-D, got {}D (shape {:?})",
-                x.ndim(), x.dims()
+                x.ndim(),
+                x.dims()
             ),
         });
     }
@@ -79,8 +81,16 @@ pub fn matvec(w: &Tensor<f32>, x: &Tensor<f32>) -> Result<Tensor<f32>> {
 
     // ── contiguity gate ────────────────────────────────────────────────────
     // CHANGED: force contiguous so we can use direct slice indexing.
-    let w_c: Cow<Tensor<f32>> = if w.is_contiguous() { Cow::Borrowed(w) } else { Cow::Owned(w.contiguous()) };
-    let x_c: Cow<Tensor<f32>> = if x.is_contiguous() { Cow::Borrowed(x) } else { Cow::Owned(x.contiguous()) };
+    let w_c: Cow<Tensor<f32>> = if w.is_contiguous() {
+        Cow::Borrowed(w)
+    } else {
+        Cow::Owned(w.contiguous())
+    };
+    let x_c: Cow<Tensor<f32>> = if x.is_contiguous() {
+        Cow::Borrowed(x)
+    } else {
+        Cow::Owned(x.contiguous())
+    };
 
     let w_data = w_c.as_slice();
     let x_data = x_c.as_slice();
@@ -123,16 +133,14 @@ pub fn matvec_2d(w: &Tensor<f32>, x: &Tensor<f32>) -> Result<Tensor<f32>> {
         return Err(TensorError::InvalidShape {
             reason: format!(
                 "matvec_2d: `x` must be 2-D [K,1], got {}D (shape {:?})",
-                x.ndim(), x.dims()
+                x.ndim(),
+                x.dims()
             ),
         });
     }
     if x.dims()[1] != 1 {
         return Err(TensorError::InvalidShape {
-            reason: format!(
-                "matvec_2d: `x` must have shape [K,1], got {:?}",
-                x.dims()
-            ),
+            reason: format!("matvec_2d: `x` must have shape [K,1], got {:?}", x.dims()),
         });
     }
 
@@ -153,7 +161,9 @@ mod tests {
 
     const EPS: f32 = 1e-5;
 
-    fn close(a: f32, b: f32) -> bool { (a - b).abs() < EPS }
+    fn close(a: f32, b: f32) -> bool {
+        (a - b).abs() < EPS
+    }
     fn close_slice(a: &[f32], b: &[f32]) -> bool {
         a.len() == b.len() && a.iter().zip(b).all(|(x, y)| close(*x, *y))
     }
@@ -164,8 +174,8 @@ mod tests {
     fn test_identity_matrix() {
         // I @ x = x
         let id = Tensor::from_vec(vec![1.0_f32, 0.0, 0.0, 1.0], vec![2, 2]).unwrap();
-        let x  = Tensor::from_vec(vec![3.0_f32, 7.0], vec![2]).unwrap();
-        let y  = matvec(&id, &x).unwrap();
+        let x = Tensor::from_vec(vec![3.0_f32, 7.0], vec![2]).unwrap();
+        let y = matvec(&id, &x).unwrap();
         assert_eq!(y.dims(), &[2]);
         assert!(close_slice(y.as_slice(), &[3.0, 7.0]));
     }
@@ -205,13 +215,13 @@ mod tests {
     /// matvec(W, x) must equal matmul_naive(W, x_col).squeeze()
     fn assert_matches_gemm(w_data: &[f32], w_shape: (usize, usize), x_data: &[f32]) {
         let (m, k) = w_shape;
-        let w  = Tensor::from_vec(w_data.to_vec(), vec![m, k]).unwrap();
-        let x  = Tensor::from_vec(x_data.to_vec(), vec![k]).unwrap();
+        let w = Tensor::from_vec(w_data.to_vec(), vec![m, k]).unwrap();
+        let x = Tensor::from_vec(x_data.to_vec(), vec![k]).unwrap();
         let mv = matvec(&w, &x).unwrap();
 
         // GEMM reference: x as column vector
         let x_col = Tensor::from_vec(x_data.to_vec(), vec![k, 1]).unwrap();
-        let mm    = matmul_naive(&w, &x_col).unwrap(); // [M, 1]
+        let mm = matmul_naive(&w, &x_col).unwrap(); // [M, 1]
 
         assert_eq!(mv.dims(), &[m]);
         assert_eq!(mm.dims(), &[m, 1]);
@@ -223,7 +233,7 @@ mod tests {
     #[test]
     fn test_matches_gemm_square_4() {
         let n = 4_usize;
-        let w: Vec<f32> = (0..(n*n)).map(|i| i as f32 * 0.1).collect();
+        let w: Vec<f32> = (0..(n * n)).map(|i| i as f32 * 0.1).collect();
         let x: Vec<f32> = (0..n).map(|i| i as f32 + 1.0).collect();
         assert_matches_gemm(&w, (n, n), &x);
     }
@@ -232,7 +242,7 @@ mod tests {
     fn test_matches_gemm_rectangular() {
         // CHANGED: non-square — common in LLM weight projections (M != K)
         let (m, k) = (64, 32);
-        let w: Vec<f32> = (0..(m*k)).map(|i| (i as f32).sin()).collect();
+        let w: Vec<f32> = (0..(m * k)).map(|i| (i as f32).sin()).collect();
         let x: Vec<f32> = (0..k).map(|i| (i as f32).cos()).collect();
         assert_matches_gemm(&w, (m, k), &x);
     }
@@ -241,7 +251,7 @@ mod tests {
     fn test_matches_gemm_tall() {
         // CHANGED: tall matrix (M >> K) — the feed-forward up-projection case
         let (m, k) = (256, 64);
-        let w: Vec<f32> = (0..(m*k)).map(|i| i as f32 * 1e-3).collect();
+        let w: Vec<f32> = (0..(m * k)).map(|i| i as f32 * 1e-3).collect();
         let x: Vec<f32> = (0..k).map(|i| i as f32 * 0.5).collect();
         assert_matches_gemm(&w, (m, k), &x);
     }
@@ -254,8 +264,8 @@ mod tests {
         // w_orig [2,3], w_T [3,2]; matvec(w_T, x[2]) -> y[3]
         let w_orig = Tensor::from_vec(vec![1.0_f32, 2.0, 3.0, 4.0, 5.0, 6.0], vec![2, 3]).unwrap();
         let w_t = w_orig.transpose(0, 1).unwrap(); // [3,2], non-contiguous
-        let x   = Tensor::from_vec(vec![1.0_f32, 0.0], vec![2]).unwrap();
-        let y   = matvec(&w_t, &x).unwrap();
+        let x = Tensor::from_vec(vec![1.0_f32, 0.0], vec![2]).unwrap();
+        let y = matvec(&w_t, &x).unwrap();
         // w_T rows: [1,4], [2,5], [3,6]  dot  [1,0] -> [1, 2, 3]
         assert_eq!(y.dims(), &[3]);
         assert!(close_slice(y.as_slice(), &[1.0, 2.0, 3.0]));
@@ -275,10 +285,10 @@ mod tests {
     #[test]
     fn test_matvec_2d_matches_1d() {
         let (m, k) = (16, 8);
-        let w: Vec<f32> = (0..(m*k)).map(|i| i as f32 * 0.05).collect();
+        let w: Vec<f32> = (0..(m * k)).map(|i| i as f32 * 0.05).collect();
         let x: Vec<f32> = (0..k).map(|i| i as f32).collect();
 
-        let wt  = Tensor::from_vec(w.clone(), vec![m, k]).unwrap();
+        let wt = Tensor::from_vec(w.clone(), vec![m, k]).unwrap();
         let x1d = Tensor::from_vec(x.clone(), vec![k]).unwrap();
         let x2d = Tensor::from_vec(x, vec![k, 1]).unwrap();
 
@@ -295,27 +305,39 @@ mod tests {
     fn test_w_not_2d() {
         let w = Tensor::from_vec(vec![1.0_f32; 8], vec![2, 2, 2]).unwrap();
         let x = Tensor::from_vec(vec![1.0_f32; 4], vec![4]).unwrap();
-        assert!(matches!(matvec(&w, &x), Err(TensorError::InvalidShape { .. })));
+        assert!(matches!(
+            matvec(&w, &x),
+            Err(TensorError::InvalidShape { .. })
+        ));
     }
 
     #[test]
     fn test_x_not_1d() {
         let w = Tensor::from_vec(vec![1.0_f32; 4], vec![2, 2]).unwrap();
         let x = Tensor::from_vec(vec![1.0_f32; 4], vec![2, 2]).unwrap();
-        assert!(matches!(matvec(&w, &x), Err(TensorError::InvalidShape { .. })));
+        assert!(matches!(
+            matvec(&w, &x),
+            Err(TensorError::InvalidShape { .. })
+        ));
     }
 
     #[test]
     fn test_shape_mismatch() {
         let w = Tensor::from_vec(vec![1.0_f32; 6], vec![2, 3]).unwrap();
         let x = Tensor::from_vec(vec![1.0_f32; 4], vec![4]).unwrap();
-        assert!(matches!(matvec(&w, &x), Err(TensorError::ShapeMismatch { .. })));
+        assert!(matches!(
+            matvec(&w, &x),
+            Err(TensorError::ShapeMismatch { .. })
+        ));
     }
 
     #[test]
     fn test_matvec_2d_x_not_column() {
         let w = Tensor::from_vec(vec![1.0_f32; 6], vec![2, 3]).unwrap();
         let x = Tensor::from_vec(vec![1.0_f32; 6], vec![2, 3]).unwrap(); // not [K,1]
-        assert!(matches!(matvec_2d(&w, &x), Err(TensorError::InvalidShape { .. })));
+        assert!(matches!(
+            matvec_2d(&w, &x),
+            Err(TensorError::InvalidShape { .. })
+        ));
     }
 }

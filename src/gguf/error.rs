@@ -45,16 +45,10 @@ pub enum GgufError {
     KeyNotFound { key: String },
 
     /// Data type mismatch during extraction.
-    TypeMismatch {
-        expected: String,
-        got: String,
-    },
+    TypeMismatch { expected: String, got: String },
 
     /// Alignment error during tensor extraction.
-    AlignmentError {
-        expected: usize,
-        actual: usize,
-    },
+    AlignmentError { expected: usize, actual: usize },
 
     /// Tensor data not available or out of bounds.
     TensorDataUnavailable { name: String },
@@ -121,10 +115,7 @@ impl fmt::Display for GgufError {
                 write!(f, "tensor data unavailable: {name}")
             }
             Self::ShapeMismatch { expected, got } => {
-                write!(
-                    f,
-                    "shape mismatch: expected {expected} elements, got {got}"
-                )
+                write!(f, "shape mismatch: expected {expected} elements, got {got}")
             }
         }
     }

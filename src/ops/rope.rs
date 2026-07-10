@@ -41,8 +41,8 @@ use crate::tensor::{Result, Tensor, TensorError};
 /// `max_seq_len × (head_dim / 2)`.
 #[derive(Debug, Clone)]
 pub struct RopeTable {
-    cos: Vec<f32>,   // CHANGED: [max_seq_len * half_dim]
-    sin: Vec<f32>,   // CHANGED: [max_seq_len * half_dim]
+    cos: Vec<f32>, // CHANGED: [max_seq_len * half_dim]
+    sin: Vec<f32>, // CHANGED: [max_seq_len * half_dim]
     /// Number of sequence positions this table covers.
     pub max_seq_len: usize,
     /// Full head dimension (must be even).
@@ -59,7 +59,10 @@ impl RopeTable {
     /// Panics if `head_dim == 0` or `head_dim` is odd.
     #[must_use]
     pub fn new(max_seq_len: usize, head_dim: usize, base: f32) -> Self {
-        assert!(head_dim > 0 && head_dim % 2 == 0, "head_dim must be a positive even number");
+        assert!(
+            head_dim > 0 && head_dim % 2 == 0,
+            "head_dim must be a positive even number"
+        );
         let half = head_dim / 2;
         let mut cos = Vec::with_capacity(max_seq_len * half);
         let mut sin = Vec::with_capacity(max_seq_len * half);
@@ -78,7 +81,13 @@ impl RopeTable {
             }
         }
 
-        Self { cos, sin, max_seq_len, head_dim, base }
+        Self {
+            cos,
+            sin,
+            max_seq_len,
+            head_dim,
+            base,
+        }
     }
 
     /// Cosine value for `(position, pair_index)`.
@@ -109,17 +118,14 @@ impl RopeTable {
 ///   doesn't match the table, or `x` is non-contiguous.
 /// * [`TensorError::IndexOutOfBounds`] if any position would exceed
 ///   `table.max_seq_len`.
-pub fn rope_apply(
-    x: &mut Tensor<f32>,
-    table: &RopeTable,
-    start_pos: usize,
-) -> Result<()> {
+pub fn rope_apply(x: &mut Tensor<f32>, table: &RopeTable, start_pos: usize) -> Result<()> {
     // ── validate ───────────────────────────────────────────────────────────
     if x.ndim() != 3 {
         return Err(TensorError::InvalidShape {
             reason: format!(
                 "rope_apply: expected 3-D [seq, n_heads, head_dim], got {}D {:?}",
-                x.ndim(), x.dims()
+                x.ndim(),
+                x.dims()
             ),
         });
     }
@@ -171,7 +177,7 @@ pub fn rope_apply(
                 let x0 = data[base_idx + 2 * i];
                 let x1 = data[base_idx + 2 * i + 1];
                 // CHANGED: standard rotation formula
-                data[base_idx + 2 * i]     = x0 * c - x1 * sn;
+                data[base_idx + 2 * i] = x0 * c - x1 * sn;
                 data[base_idx + 2 * i + 1] = x1 * c + x0 * sn;
             }
         }
@@ -208,7 +214,9 @@ pub fn rope_apply_copy(
 mod tests {
     use super::*;
 
-    fn close(a: f32, b: f32, tol: f32) -> bool { (a - b).abs() < tol }
+    fn close(a: f32, b: f32, tol: f32) -> bool {
+        (a - b).abs() < tol
+    }
     fn close_slice(a: &[f32], b: &[f32], tol: f32) -> bool {
         a.len() == b.len() && a.iter().zip(b).all(|(x, y)| close(*x, *y, tol))
     }
@@ -230,10 +238,12 @@ mod tests {
     fn test_table_theta_decreases_with_pair_index() {
         // CHANGED: θᵢ = 1/base^(2i/d) is strictly decreasing — low-freq dims rotate slower
         let table = RopeTable::new(2, 8, 10_000.0); // max_seq_len=2 so pos=1 is valid
-        // At pos=1 the angle equals θᵢ directly; check consecutive pair angles
-        // We do this by comparing the actual sin values (larger angle → larger |sin| for small angles)
+                                                    // At pos=1 the angle equals θᵢ directly; check consecutive pair angles
+                                                    // We do this by comparing the actual sin values (larger angle → larger |sin| for small angles)
         let half = 4;
-        let angles: Vec<f32> = (0..half).map(|i| table.sin(1, i).atan2(table.cos(1, i)).abs()).collect();
+        let angles: Vec<f32> = (0..half)
+            .map(|i| table.sin(1, i).atan2(table.cos(1, i)).abs())
+            .collect();
         for w in angles.windows(2) {
             assert!(w[0] >= w[1], "angle at pair {} should be >= pair {}", 0, 1);
         }
@@ -248,7 +258,10 @@ mod tests {
             for i in 0..half {
                 let c = table.cos(pos, i);
                 let s = table.sin(pos, i);
-                assert!(close(c * c + s * s, 1.0, 1e-6), "pythagorean failed at pos={pos} i={i}");
+                assert!(
+                    close(c * c + s * s, 1.0, 1e-6),
+                    "pythagorean failed at pos={pos} i={i}"
+                );
             }
         }
     }
@@ -259,8 +272,10 @@ mod tests {
     fn test_rope_apply_pos0_identity() {
         // CHANGED: at pos=0 every rotation is by 0 radians → output == input
         let head_dim = 4;
-        let data = vec![1.0_f32, 2.0, 3.0, 4.0,   // head 0
-                        5.0,     6.0, 7.0, 8.0];   // head 1
+        let data = vec![
+            1.0_f32, 2.0, 3.0, 4.0, // head 0
+            5.0, 6.0, 7.0, 8.0,
+        ]; // head 1
         let mut x = Tensor::from_vec(data.clone(), vec![1, 2, head_dim]).unwrap();
         let table = RopeTable::new(4, head_dim, 10_000.0);
         rope_apply(&mut x, &table, 0).unwrap();
@@ -277,7 +292,8 @@ mod tests {
         let d1 = vec![5.0_f32, 6.0, 7.0, 8.0];
 
         // Batch: apply to [2, 1, 4] in one call
-        let mut batch = Tensor::from_vec([d0.clone(), d1.clone()].concat(), vec![2, 1, head_dim]).unwrap();
+        let mut batch =
+            Tensor::from_vec([d0.clone(), d1.clone()].concat(), vec![2, 1, head_dim]).unwrap();
         let table = RopeTable::new(8, head_dim, 10_000.0);
         rope_apply(&mut batch, &table, 0).unwrap();
 
@@ -305,8 +321,10 @@ mod tests {
         rope_apply(&mut x, &table, 37).unwrap(); // arbitrary non-zero position
 
         let norm_after: f32 = x.as_slice().iter().map(|v| v * v).sum::<f32>().sqrt();
-        assert!(close(norm_before, norm_after, 1e-5),
-            "norm changed: {norm_before} → {norm_after}");
+        assert!(
+            close(norm_before, norm_after, 1e-5),
+            "norm changed: {norm_before} → {norm_after}"
+        );
     }
 
     // ── rope_apply: start_pos offset ─────────────────────────────────────
@@ -389,8 +407,12 @@ mod tests {
             3.0 * c1 - 4.0 * s1,
             4.0 * c1 + 3.0 * s1,
         ];
-        assert!(close_slice(x.as_slice(), &expected, 1e-5),
-            "got {:?}, expected {:?}", x.as_slice(), expected);
+        assert!(
+            close_slice(x.as_slice(), &expected, 1e-5),
+            "got {:?}, expected {:?}",
+            x.as_slice(),
+            expected
+        );
     }
 
     // ── error handling ────────────────────────────────────────────────────
@@ -399,22 +421,31 @@ mod tests {
     fn test_rope_wrong_ndim() {
         let mut x = Tensor::from_vec(vec![1.0_f32; 8], vec![2, 4]).unwrap(); // 2-D
         let table = RopeTable::new(4, 4, 10_000.0);
-        assert!(matches!(rope_apply(&mut x, &table, 0), Err(TensorError::InvalidShape { .. })));
+        assert!(matches!(
+            rope_apply(&mut x, &table, 0),
+            Err(TensorError::InvalidShape { .. })
+        ));
     }
 
     #[test]
     fn test_rope_head_dim_mismatch() {
         let mut x = Tensor::from_vec(vec![1.0_f32; 8], vec![1, 1, 8]).unwrap();
         let table = RopeTable::new(4, 4, 10_000.0); // table is for head_dim=4, x has 8
-        assert!(matches!(rope_apply(&mut x, &table, 0), Err(TensorError::InvalidShape { .. })));
+        assert!(matches!(
+            rope_apply(&mut x, &table, 0),
+            Err(TensorError::InvalidShape { .. })
+        ));
     }
 
     #[test]
     fn test_rope_out_of_bounds_position() {
         let mut x = Tensor::from_vec(vec![1.0_f32; 4], vec![1, 1, 4]).unwrap();
         let table = RopeTable::new(2, 4, 10_000.0); // only 2 positions
-        // start_pos=2 with seq=1 → end_pos=3 > max_seq_len=2
-        assert!(matches!(rope_apply(&mut x, &table, 2), Err(TensorError::IndexOutOfBounds { .. })));
+                                                    // start_pos=2 with seq=1 → end_pos=3 > max_seq_len=2
+        assert!(matches!(
+            rope_apply(&mut x, &table, 2),
+            Err(TensorError::IndexOutOfBounds { .. })
+        ));
     }
 
     #[test]

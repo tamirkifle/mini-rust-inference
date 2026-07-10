@@ -108,7 +108,10 @@ impl MemorySnapshot {
             format_bytes(self.arena_capacity_bytes),
             format_bytes(self.arena_used_bytes)
         );
-        println!("  Engine total : {}", format_bytes(self.engine_total_bytes()));
+        println!(
+            "  Engine total : {}",
+            format_bytes(self.engine_total_bytes())
+        );
         if self.process_rss_bytes > 0 {
             println!("  Process RSS  : {}", format_bytes(self.process_rss_bytes));
         }
@@ -157,12 +160,12 @@ impl MemoryTracker {
     /// Updates the internal peak if the new snapshot's engine total is higher.
     pub fn snapshot(&mut self, pool: &TensorPool, arena: &Arena) -> MemorySnapshot {
         let snap = MemorySnapshot {
-            weight_mmap_bytes:    self.weight_mmap_bytes,
-            kv_cache_bytes:       self.kv_cache_bytes,
-            pool_free_bytes:      pool.pooled_bytes(),
+            weight_mmap_bytes: self.weight_mmap_bytes,
+            kv_cache_bytes: self.kv_cache_bytes,
+            pool_free_bytes: pool.pooled_bytes(),
             arena_capacity_bytes: arena.capacity() * std::mem::size_of::<f32>(),
-            arena_used_bytes:     arena.used()      * std::mem::size_of::<f32>(),
-            process_rss_bytes:    query_rss(),
+            arena_used_bytes: arena.used() * std::mem::size_of::<f32>(),
+            process_rss_bytes: query_rss(),
         };
 
         if snap.engine_total_bytes() > self.peak.engine_total_bytes() {
@@ -228,11 +231,7 @@ fn read_linux_rss() -> Option<usize> {
     for line in contents.lines() {
         if line.starts_with("VmRSS:") {
             // Format: "VmRSS:     12345 kB"
-            let kb: usize = line
-                .split_whitespace()
-                .nth(1)?
-                .parse()
-                .ok()?;
+            let kb: usize = line.split_whitespace().nth(1)?.parse().ok()?;
             return Some(kb * 1024);
         }
     }
@@ -282,9 +281,8 @@ fn read_macos_rss() -> Option<usize> {
 
     // resident_size is at byte offset 16 (after virtual_size:u64 + region_count:u32 + page_size:u32)
     // = u64 at u32-index 4
-    let resident: u64 = u64::from_le_bytes(unsafe {
-        mem::transmute::<[u32; 2], [u8; 8]>([info[4], info[5]])
-    });
+    let resident: u64 =
+        u64::from_le_bytes(unsafe { mem::transmute::<[u32; 2], [u8; 8]>([info[4], info[5]]) });
     Some(resident as usize)
 }
 

@@ -346,12 +346,7 @@ impl<T: fmt::Display + Clone> fmt::Display for Tensor<T> {
         write!(f, "Tensor(shape={}, ", self.shape())?;
 
         // Show first few elements
-        let preview: Vec<String> = self
-            .data
-            .iter()
-            .take(6)
-            .map(|x| format!("{x}"))
-            .collect();
+        let preview: Vec<String> = self.data.iter().take(6).map(|x| format!("{x}")).collect();
 
         if self.numel() > 6 {
             write!(f, "[{}, ...])", preview.join(", "))

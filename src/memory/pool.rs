@@ -276,11 +276,11 @@ mod tests {
     #[test]
     fn test_different_sizes_are_independent() {
         let mut pool = TensorPool::new();
-        let b64  = pool.alloc(64);
+        let b64 = pool.alloc(64);
         let b128 = pool.alloc(128);
         pool.free(b64);
         pool.free(b128);
-        assert_eq!(pool.free_count(64),  1);
+        assert_eq!(pool.free_count(64), 1);
         assert_eq!(pool.free_count(128), 1);
     }
 
@@ -291,9 +291,7 @@ mod tests {
         let mut pool = TensorPool::new();
         // Allocate MAX_FREE_PER_SIZE + 2 buffers first, then free them all at
         // once so the free list fills up and the last two are dropped.
-        let bufs: Vec<_> = (0..MAX_FREE_PER_SIZE + 2)
-            .map(|_| pool.alloc(16))
-            .collect();
+        let bufs: Vec<_> = (0..MAX_FREE_PER_SIZE + 2).map(|_| pool.alloc(16)).collect();
         for buf in bufs {
             pool.free(buf);
         }
@@ -339,11 +337,11 @@ mod tests {
         let _b3 = pool.alloc(100); // reuse
         pool.free(b2);
         // total_allocs = 3, fresh = 2, reuses = 1, total_frees = 2, stored = 2
-        assert_eq!(pool.stats().total_allocs,  3);
-        assert_eq!(pool.stats().fresh_allocs,  2);
-        assert_eq!(pool.stats().reuses,        1);
-        assert_eq!(pool.stats().total_frees,   2);
-        assert_eq!(pool.stats().stored_frees,  2);
+        assert_eq!(pool.stats().total_allocs, 3);
+        assert_eq!(pool.stats().fresh_allocs, 2);
+        assert_eq!(pool.stats().reuses, 1);
+        assert_eq!(pool.stats().total_frees, 2);
+        assert_eq!(pool.stats().stored_frees, 2);
     }
 
     #[test]
@@ -353,7 +351,7 @@ mod tests {
         let _b1 = pool.alloc(64); // reuse
         let _b2 = pool.alloc(64); // reuse
         let _b3 = pool.alloc(64); // fresh
-        // rate = 2/3
+                                  // rate = 2/3
         assert!((pool.stats().reuse_rate() - 2.0 / 3.0).abs() < 1e-9);
     }
 

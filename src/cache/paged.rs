@@ -54,11 +54,11 @@ pub struct PagedKvCache {
     k_pages: Vec<Vec<Vec<f32>>>,
     /// `v_pages[layer]` — same layout as `k_pages`.
     v_pages: Vec<Vec<Vec<f32>>>,
-    n_layers:  usize,
+    n_layers: usize,
     /// Number of token rows per page.
     page_size: usize,
     /// `n_kv_heads * head_dim` — width of each K/V row.
-    kv_dim:    usize,
+    kv_dim: usize,
     /// Hard limit on pages per layer (= ceil(max_seq_len / page_size)).
     max_pages: usize,
 }
@@ -79,25 +79,25 @@ impl PagedKvCache {
     /// Panics if any dimension is zero.
     #[must_use]
     pub fn new(
-        n_layers:    usize,
+        n_layers: usize,
         max_seq_len: usize,
-        n_kv_heads:  usize,
-        head_dim:    usize,
-        page_size:   usize,
+        n_kv_heads: usize,
+        head_dim: usize,
+        page_size: usize,
     ) -> Self {
-        assert!(n_layers > 0,    "PagedKvCache: n_layers must be > 0");
+        assert!(n_layers > 0, "PagedKvCache: n_layers must be > 0");
         assert!(max_seq_len > 0, "PagedKvCache: max_seq_len must be > 0");
-        assert!(n_kv_heads > 0,  "PagedKvCache: n_kv_heads must be > 0");
-        assert!(head_dim > 0,    "PagedKvCache: head_dim must be > 0");
-        assert!(page_size > 0,   "PagedKvCache: page_size must be > 0");
+        assert!(n_kv_heads > 0, "PagedKvCache: n_kv_heads must be > 0");
+        assert!(head_dim > 0, "PagedKvCache: head_dim must be > 0");
+        assert!(page_size > 0, "PagedKvCache: page_size must be > 0");
 
-        let kv_dim    = n_kv_heads * head_dim;
+        let kv_dim = n_kv_heads * head_dim;
         // ceil division
-        let max_pages = (max_seq_len + page_size - 1) / page_size;
+        let max_pages = max_seq_len.div_ceil(page_size);
 
         Self {
-            k_pages:   vec![Vec::new(); n_layers],
-            v_pages:   vec![Vec::new(); n_layers],
+            k_pages: vec![Vec::new(); n_layers],
+            v_pages: vec![Vec::new(); n_layers],
             n_layers,
             page_size,
             kv_dim,
@@ -151,7 +151,10 @@ impl PagedKvCache {
     /// `seq_len > max_seq_len`.
     pub fn read_k(&self, layer: usize, seq_len: usize) -> Result<Tensor<f32>> {
         self.validate_read(layer, seq_len)?;
-        Ok(Tensor::from_vec(self.gather_rows(&self.k_pages[layer], seq_len), vec![seq_len, self.kv_dim])?)
+        Ok(Tensor::from_vec(
+            self.gather_rows(&self.k_pages[layer], seq_len),
+            vec![seq_len, self.kv_dim],
+        )?)
     }
 
     /// Assemble cached V for `layer` positions `0..seq_len`.
@@ -161,37 +164,56 @@ impl PagedKvCache {
     /// Same as [`read_k`].
     pub fn read_v(&self, layer: usize, seq_len: usize) -> Result<Tensor<f32>> {
         self.validate_read(layer, seq_len)?;
-        Ok(Tensor::from_vec(self.gather_rows(&self.v_pages[layer], seq_len), vec![seq_len, self.kv_dim])?)
+        Ok(Tensor::from_vec(
+            self.gather_rows(&self.v_pages[layer], seq_len),
+            vec![seq_len, self.kv_dim],
+        )?)
     }
 
     // ── accessors ─────────────────────────────────────────────────────────
 
     /// Number of transformer layers this cache was built for.
     #[must_use]
-    pub fn n_layers(&self) -> usize { self.n_layers }
+    pub fn n_layers(&self) -> usize {
+        self.n_layers
+    }
 
     /// Tokens per page.
     #[must_use]
-    pub fn page_size(&self) -> usize { self.page_size }
+    pub fn page_size(&self) -> usize {
+        self.page_size
+    }
 
     /// `n_kv_heads * head_dim`.
     #[must_use]
-    pub fn kv_dim(&self) -> usize { self.kv_dim }
+    pub fn kv_dim(&self) -> usize {
+        self.kv_dim
+    }
 
     /// Maximum pages per layer (= `ceil(max_seq_len / page_size)`).
     #[must_use]
-    pub fn max_pages(&self) -> usize { self.max_pages }
+    pub fn max_pages(&self) -> usize {
+        self.max_pages
+    }
 
     /// Number of pages currently allocated for K in `layer`.
     #[must_use]
     pub fn allocated_pages_k(&self, layer: usize) -> usize {
-        if layer < self.n_layers { self.k_pages[layer].len() } else { 0 }
+        if layer < self.n_layers {
+            self.k_pages[layer].len()
+        } else {
+            0
+        }
     }
 
     /// Number of pages currently allocated for V in `layer`.
     #[must_use]
     pub fn allocated_pages_v(&self, layer: usize) -> usize {
-        if layer < self.n_layers { self.v_pages[layer].len() } else { 0 }
+        if layer < self.n_layers {
+            self.v_pages[layer].len()
+        } else {
+            0
+        }
     }
 
     // ── bulk operations ───────────────────────────────────────────────────
@@ -311,7 +333,13 @@ mod tests {
     use super::*;
     use crate::cache::KvCache;
 
-    fn make_paged(n_layers: usize, max_seq: usize, kv_heads: usize, hd: usize, ps: usize) -> PagedKvCache {
+    fn make_paged(
+        n_layers: usize,
+        max_seq: usize,
+        kv_heads: usize,
+        hd: usize,
+        ps: usize,
+    ) -> PagedKvCache {
         PagedKvCache::new(n_layers, max_seq, kv_heads, hd, ps)
     }
 
@@ -320,8 +348,8 @@ mod tests {
     #[test]
     fn test_construction_dimensions() {
         let c = make_paged(4, 128, 8, 16, 16);
-        assert_eq!(c.kv_dim(),    8 * 16);
-        assert_eq!(c.n_layers(),  4);
+        assert_eq!(c.kv_dim(), 8 * 16);
+        assert_eq!(c.n_layers(), 4);
         assert_eq!(c.page_size(), 16);
         // max_pages = ceil(128 / 16) = 8
         assert_eq!(c.max_pages(), 8);
@@ -394,15 +422,15 @@ mod tests {
 
     #[test]
     fn test_paged_matches_contiguous_sequential_writes() {
-        let n_layers   = 1_usize;
+        let n_layers = 1_usize;
         let n_kv_heads = 2_usize;
-        let head_dim   = 4_usize;
-        let max_seq    = 32_usize;
-        let page_size  = 4_usize;
-        let seq_len    = 12_usize;
+        let head_dim = 4_usize;
+        let max_seq = 32_usize;
+        let page_size = 4_usize;
+        let seq_len = 12_usize;
 
         let mut contiguous = KvCache::new(n_layers, max_seq, n_kv_heads, head_dim);
-        let mut paged      = PagedKvCache::new(n_layers, max_seq, n_kv_heads, head_dim, page_size);
+        let mut paged = PagedKvCache::new(n_layers, max_seq, n_kv_heads, head_dim, page_size);
 
         for pos in 0..seq_len {
             let row_k: Vec<f32> = (0..n_kv_heads * head_dim)
@@ -421,13 +449,19 @@ mod tests {
         let pk = paged.read_k(0, seq_len).unwrap();
         assert_eq!(ck.dims(), pk.dims());
         for (i, (&a, &b)) in ck.as_slice().iter().zip(pk.as_slice()).enumerate() {
-            assert!((a - b).abs() < 1e-7, "K mismatch at {i}: contiguous={a} paged={b}");
+            assert!(
+                (a - b).abs() < 1e-7,
+                "K mismatch at {i}: contiguous={a} paged={b}"
+            );
         }
 
         let cv = contiguous.read_v(0, seq_len).unwrap();
         let pv = paged.read_v(0, seq_len).unwrap();
         for (i, (&a, &b)) in cv.as_slice().iter().zip(pv.as_slice()).enumerate() {
-            assert!((a - b).abs() < 1e-7, "V mismatch at {i}: contiguous={a} paged={b}");
+            assert!(
+                (a - b).abs() < 1e-7,
+                "V mismatch at {i}: contiguous={a} paged={b}"
+            );
         }
     }
 
@@ -437,13 +471,13 @@ mod tests {
     fn test_cross_page_boundary_reads_correctly() {
         let kv_dim = 2_usize;
         let mut c = make_paged(1, 32, 1, kv_dim, 3); // page_size=3
-        // pos=2 is last slot of page 0; pos=3 is first slot of page 1
+                                                     // pos=2 is last slot of page 0; pos=3 is first slot of page 1
         c.write_k(0, 2, &[10.0, 20.0]).unwrap();
         c.write_k(0, 3, &[30.0, 40.0]).unwrap();
 
         let k = c.read_k(0, 4).unwrap(); // [4, 2]
-        assert_eq!(&k.as_slice()[4..6],  &[10.0, 20.0]); // pos=2 → offset 2*2=4
-        assert_eq!(&k.as_slice()[6..8],  &[30.0, 40.0]); // pos=3 → offset 3*2=6
+        assert_eq!(&k.as_slice()[4..6], &[10.0, 20.0]); // pos=2 → offset 2*2=4
+        assert_eq!(&k.as_slice()[6..8], &[30.0, 40.0]); // pos=3 → offset 3*2=6
     }
 
     // ── multiple layers isolated ─────────────────────────────────────────
@@ -492,8 +526,8 @@ mod tests {
     #[test]
     fn test_page_size_1() {
         let kv_dim = 4_usize;
-        let seq    = 5_usize;
-        let mut c  = make_paged(1, 16, 1, kv_dim, 1); // every pos is its own page
+        let seq = 5_usize;
+        let mut c = make_paged(1, 16, 1, kv_dim, 1); // every pos is its own page
         for pos in 0..seq {
             let row: Vec<f32> = (0..kv_dim).map(|i| (pos * kv_dim + i) as f32).collect();
             c.write_k(0, pos, &row).unwrap();
@@ -502,7 +536,10 @@ mod tests {
         let k = c.read_k(0, seq).unwrap();
         for pos in 0..seq {
             let expected: Vec<f32> = (0..kv_dim).map(|i| (pos * kv_dim + i) as f32).collect();
-            assert_eq!(&k.as_slice()[pos*kv_dim..(pos+1)*kv_dim], expected.as_slice());
+            assert_eq!(
+                &k.as_slice()[pos * kv_dim..(pos + 1) * kv_dim],
+                expected.as_slice()
+            );
         }
     }
 
@@ -520,7 +557,7 @@ mod tests {
     #[test]
     fn test_write_pos_exceeds_max_pages() {
         let mut c = make_paged(1, 8, 1, 4, 4); // max_pages = 2
-        // pos=8 → page_idx=2 >= max_pages=2
+                                               // pos=8 → page_idx=2 >= max_pages=2
         assert!(matches!(
             c.write_k(0, 8, &[0.0; 4]),
             Err(TensorError::InvalidShape { .. })
@@ -557,7 +594,7 @@ mod tests {
     #[test]
     fn test_read_seq_exceeds_max_seq_len() {
         let c = make_paged(1, 8, 1, 4, 4); // max_pages=2, max_seq effectively 8
-        // seq_len=9 → needs 3 pages > max_pages=2
+                                           // seq_len=9 → needs 3 pages > max_pages=2
         assert!(matches!(
             c.read_k(0, 9),
             Err(TensorError::InvalidShape { .. })

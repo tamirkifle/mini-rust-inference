@@ -25,8 +25,8 @@
 //! Multi-head usage: call this function per head after splitting the
 //! `[seq, n_heads * d_k]` tensor into `n_heads` × `[seq, d_k]` slices.
 
-use crate::tensor::{Result, Tensor, TensorError};
 use crate::ops::{matmul_naive, softmax};
+use crate::tensor::{Result, Tensor, TensorError};
 
 // ── public API ──────────────────────────────────────────────────────────────
 
@@ -54,42 +54,41 @@ pub fn scaled_dot_product_attention(
     v: &Tensor<f32>, // CHANGED
 ) -> Result<Tensor<f32>> {
     // ── shape checks ──────────────────────────────────────────────────────
-    if q.ndim() != 2 { // CHANGED
+    if q.ndim() != 2 {
+        // CHANGED
         return Err(TensorError::InvalidShape {
-            reason: format!(
-                "sdpa: q must be 2-D, got {}D {:?}", q.ndim(), q.dims()
-            ),
+            reason: format!("sdpa: q must be 2-D, got {}D {:?}", q.ndim(), q.dims()),
         });
     }
-    if k.ndim() != 2 { // CHANGED
+    if k.ndim() != 2 {
+        // CHANGED
         return Err(TensorError::InvalidShape {
-            reason: format!(
-                "sdpa: k must be 2-D, got {}D {:?}", k.ndim(), k.dims()
-            ),
+            reason: format!("sdpa: k must be 2-D, got {}D {:?}", k.ndim(), k.dims()),
         });
     }
-    if v.ndim() != 2 { // CHANGED
+    if v.ndim() != 2 {
+        // CHANGED
         return Err(TensorError::InvalidShape {
-            reason: format!(
-                "sdpa: v must be 2-D, got {}D {:?}", v.ndim(), v.dims()
-            ),
+            reason: format!("sdpa: v must be 2-D, got {}D {:?}", v.ndim(), v.dims()),
         });
     }
 
-    let [_seq_q, d_k]  = [q.dims()[0], q.dims()[1]]; // CHANGED
+    let [_seq_q, d_k] = [q.dims()[0], q.dims()[1]]; // CHANGED
     let [seq_k, d_k_k] = [k.dims()[0], k.dims()[1]]; // CHANGED
     let [seq_k_v, _d_v] = [v.dims()[0], v.dims()[1]]; // CHANGED
 
-    if d_k != d_k_k { // CHANGED
+    if d_k != d_k_k {
+        // CHANGED
         return Err(TensorError::ShapeMismatch {
             expected: vec![seq_k, d_k],
-            got:      vec![k.dims()[0], k.dims()[1]],
+            got: vec![k.dims()[0], k.dims()[1]],
         });
     }
-    if seq_k != seq_k_v { // CHANGED
+    if seq_k != seq_k_v {
+        // CHANGED
         return Err(TensorError::ShapeMismatch {
             expected: vec![seq_k, v.dims()[1]],
-            got:      vec![v.dims()[0], v.dims()[1]],
+            got: vec![v.dims()[0], v.dims()[1]],
         });
     }
 
@@ -132,12 +131,13 @@ pub fn scaled_dot_product_attention(
 #[must_use = "returns a new tensor with bias added"] // CHANGED
 pub fn add_attention_bias(
     scores: &Tensor<f32>, // CHANGED
-    bias:   &Tensor<f32>, // CHANGED
+    bias: &Tensor<f32>,   // CHANGED
 ) -> Result<Tensor<f32>> {
-    if scores.dims() != bias.dims() { // CHANGED
+    if scores.dims() != bias.dims() {
+        // CHANGED
         return Err(TensorError::ShapeMismatch {
             expected: scores.dims().to_vec(),
-            got:      bias.dims().to_vec(),
+            got: bias.dims().to_vec(),
         });
     }
     let data: Vec<f32> = scores // CHANGED
@@ -166,40 +166,57 @@ pub fn add_attention_bias(
 /// Same as [`scaled_dot_product_attention`] plus shape mismatch for `bias`.
 #[must_use = "returns the attention output"] // CHANGED
 pub fn scaled_dot_product_attention_with_bias(
-    q:    &Tensor<f32>, // CHANGED
-    k:    &Tensor<f32>, // CHANGED
-    v:    &Tensor<f32>, // CHANGED
+    q: &Tensor<f32>,    // CHANGED
+    k: &Tensor<f32>,    // CHANGED
+    v: &Tensor<f32>,    // CHANGED
     bias: &Tensor<f32>, // CHANGED
 ) -> Result<Tensor<f32>> {
     // ── shape checks (same as plain SDPA) ────────────────────────────────
-    if q.ndim() != 2 { // CHANGED
+    if q.ndim() != 2 {
+        // CHANGED
         return Err(TensorError::InvalidShape {
-            reason: format!("sdpa_biased: q must be 2-D, got {}D {:?}", q.ndim(), q.dims()),
+            reason: format!(
+                "sdpa_biased: q must be 2-D, got {}D {:?}",
+                q.ndim(),
+                q.dims()
+            ),
         });
     }
-    if k.ndim() != 2 { // CHANGED
+    if k.ndim() != 2 {
+        // CHANGED
         return Err(TensorError::InvalidShape {
-            reason: format!("sdpa_biased: k must be 2-D, got {}D {:?}", k.ndim(), k.dims()),
+            reason: format!(
+                "sdpa_biased: k must be 2-D, got {}D {:?}",
+                k.ndim(),
+                k.dims()
+            ),
         });
     }
-    if v.ndim() != 2 { // CHANGED
+    if v.ndim() != 2 {
+        // CHANGED
         return Err(TensorError::InvalidShape {
-            reason: format!("sdpa_biased: v must be 2-D, got {}D {:?}", v.ndim(), v.dims()),
+            reason: format!(
+                "sdpa_biased: v must be 2-D, got {}D {:?}",
+                v.ndim(),
+                v.dims()
+            ),
         });
     }
 
     let d_k = q.dims()[1]; // CHANGED
-    if k.dims()[1] != d_k { // CHANGED
+    if k.dims()[1] != d_k {
+        // CHANGED
         return Err(TensorError::ShapeMismatch {
             expected: vec![k.dims()[0], d_k],
-            got:      k.dims().to_vec(),
+            got: k.dims().to_vec(),
         });
     }
     let seq_k = k.dims()[0]; // CHANGED
-    if v.dims()[0] != seq_k { // CHANGED
+    if v.dims()[0] != seq_k {
+        // CHANGED
         return Err(TensorError::ShapeMismatch {
             expected: vec![seq_k, v.dims()[1]],
-            got:      v.dims().to_vec(),
+            got: v.dims().to_vec(),
         });
     }
 
@@ -227,7 +244,9 @@ mod tests {
 
     const EPS: f32 = 1e-5;
 
-    fn close(a: f32, b: f32) -> bool { (a - b).abs() < EPS }
+    fn close(a: f32, b: f32) -> bool {
+        (a - b).abs() < EPS
+    }
     fn close_slice(a: &[f32], b: &[f32], tol: f32) -> bool {
         a.len() == b.len() && a.iter().zip(b).all(|(x, y)| (x - y).abs() < tol)
     }
@@ -247,7 +266,7 @@ mod tests {
     #[test]
     fn test_sdpa_output_shape_rectangular() {
         // Q: [2, 4], K: [6, 4], V: [6, 8] → out: [2, 8]
-        let q = Tensor::from_vec(vec![1.0_f32; 8],  vec![2, 4]).unwrap();
+        let q = Tensor::from_vec(vec![1.0_f32; 8], vec![2, 4]).unwrap();
         let k = Tensor::from_vec(vec![1.0_f32; 24], vec![6, 4]).unwrap();
         let v = Tensor::from_vec(vec![1.0_f32; 48], vec![6, 8]).unwrap();
         let out = scaled_dot_product_attention(&q, &k, &v).unwrap();
@@ -263,18 +282,18 @@ mod tests {
         // V: rows [1,2,3], [4,5,6], [7,8,9] → each output row = mean = [4, 5, 6]
         let q = Tensor::from_vec(vec![0.0_f32; 8], vec![2, 4]).unwrap();
         let k = Tensor::from_vec(vec![0.0_f32; 12], vec![3, 4]).unwrap();
-        let v_data = vec![
-            1.0_f32, 2.0, 3.0,
-            4.0,     5.0, 6.0,
-            7.0,     8.0, 9.0,
-        ];
+        let v_data = vec![1.0_f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
         let v = Tensor::from_vec(v_data, vec![3, 3]).unwrap();
         let out = scaled_dot_product_attention(&q, &k, &v).unwrap();
 
         // Each output row should be [4, 5, 6] (mean of V rows)
         let expected = [4.0_f32, 5.0, 6.0, 4.0, 5.0, 6.0];
-        assert!(close_slice(out.as_slice(), &expected, 1e-5),
-            "got {:?}, expected {:?}", out.as_slice(), expected);
+        assert!(
+            close_slice(out.as_slice(), &expected, 1e-5),
+            "got {:?}, expected {:?}",
+            out.as_slice(),
+            expected
+        );
     }
 
     // ── hand-computed reference ───────────────────────────────────────────
@@ -299,8 +318,11 @@ mod tests {
         assert_eq!(out.dims(), &[2, 2]);
 
         let expected = [1.6602_f32, 2.6602, 2.3398, 3.3398];
-        assert!(close_slice(out.as_slice(), &expected, 1e-3),
-            "got {:?}", out.as_slice());
+        assert!(
+            close_slice(out.as_slice(), &expected, 1e-3),
+            "got {:?}",
+            out.as_slice()
+        );
     }
 
     // ── scale factor applied correctly ────────────────────────────────────
@@ -329,16 +351,24 @@ mod tests {
 
         // d_k = 4: raw score = 2*2 = 4 → scale = 1/sqrt(4) = 0.5 → softmax([2, 0])
         let q4 = Tensor::from_vec(vec![2.0_f32, 0.0, 0.0, 0.0], vec![1, 4]).unwrap(); // CHANGED
-        let k4 = Tensor::from_vec(vec![2.0_f32, 0.0, 0.0, 0.0,  // row 0
-                                       0.0,     0.0, 0.0, 0.0], vec![2, 4]).unwrap(); // CHANGED
+        let k4 = Tensor::from_vec(
+            vec![
+                2.0_f32, 0.0, 0.0, 0.0, // row 0
+                0.0, 0.0, 0.0, 0.0,
+            ],
+            vec![2, 4],
+        )
+        .unwrap(); // CHANGED
         let v4 = Tensor::from_vec(vec![1.0_f32, 0.0], vec![2, 1]).unwrap();
         let out4 = scaled_dot_product_attention(&q4, &k4, &v4).unwrap();
         let w0_flat = out4.as_slice()[0]; // should be ~0.88
 
         // Larger d_k with same raw score but stronger scaling → flatter distribution
-        assert!(w0_flat < w0_sharp, // CHANGED
+        assert!(
+            w0_flat < w0_sharp, // CHANGED
             "expected flatter attention for d_k=4 (w0={w0_flat:.4}), \
-             got sharper than d_k=1 (w0={w0_sharp:.4})");
+             got sharper than d_k=1 (w0={w0_sharp:.4})"
+        );
     }
 
     // ── 1x1 degenerate case ───────────────────────────────────────────────
@@ -374,7 +404,7 @@ mod tests {
     #[test]
     fn test_add_attention_bias_zero_mask() {
         let scores = Tensor::from_vec(vec![1.0_f32, 2.0, 3.0, 4.0], vec![2, 2]).unwrap();
-        let bias   = Tensor::from_vec(vec![0.0_f32; 4], vec![2, 2]).unwrap();
+        let bias = Tensor::from_vec(vec![0.0_f32; 4], vec![2, 2]).unwrap();
         let out = add_attention_bias(&scores, &bias).unwrap();
         assert!(close_slice(out.as_slice(), scores.as_slice(), 1e-7));
     }
@@ -383,7 +413,7 @@ mod tests {
     fn test_add_attention_bias_neg_inf_masks() {
         // Adding -inf to a position should drive that attention weight to ~0 after softmax
         let scores = Tensor::from_vec(vec![1.0_f32, 1.0], vec![1, 2]).unwrap();
-        let bias   = Tensor::from_vec(vec![0.0_f32, f32::NEG_INFINITY], vec![1, 2]).unwrap();
+        let bias = Tensor::from_vec(vec![0.0_f32, f32::NEG_INFINITY], vec![1, 2]).unwrap();
         let biased = add_attention_bias(&scores, &bias).unwrap();
         // softmax([1, -inf]) → [1.0, 0.0]
         let weights = crate::ops::softmax(&biased).unwrap();
@@ -400,12 +430,15 @@ mod tests {
         let v = Tensor::from_vec(vec![1.0_f32, 2.0, 3.0, 4.0], vec![2, 2]).unwrap();
         let bias = Tensor::from_vec(vec![0.0_f32; 4], vec![2, 2]).unwrap();
 
-        let plain  = scaled_dot_product_attention(&q, &k, &v).unwrap();
+        let plain = scaled_dot_product_attention(&q, &k, &v).unwrap();
         let biased = scaled_dot_product_attention_with_bias(&q, &k, &v, &bias).unwrap();
 
-        assert!(close_slice(plain.as_slice(), biased.as_slice(), 1e-6),
+        assert!(
+            close_slice(plain.as_slice(), biased.as_slice(), 1e-6),
             "biased(zero) != plain:\n  plain={:?}\n  biased={:?}",
-            plain.as_slice(), biased.as_slice());
+            plain.as_slice(),
+            biased.as_slice()
+        );
     }
 
     // ── error handling ────────────────────────────────────────────────────

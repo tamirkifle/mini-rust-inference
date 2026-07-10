@@ -658,7 +658,10 @@ mod tests {
         cache.insert("t4", make_tensor(50));
 
         // t1 was recently accessed, should NOT be evicted
-        assert!(cache.contains("t1"), "t1 should be retained (recently accessed)");
+        assert!(
+            cache.contains("t1"),
+            "t1 should be retained (recently accessed)"
+        );
         // t4 was just inserted, should be present
         assert!(cache.contains("t4"), "t4 should be present (just inserted)");
         // Either t2 or t3 should be evicted (both are equally LRU)

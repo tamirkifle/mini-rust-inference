@@ -46,8 +46,8 @@
 //! | [`neon_gemm_slice`]   | Raw-slice GEMM used by `blocked.rs`        |
 //! | [`neon_gemm_row_slice`]| Single-row GEMM used by `parallel.rs`    |
 
-use std::borrow::Cow;
 use crate::tensor::{Result, Tensor, TensorError};
+use std::borrow::Cow;
 
 // ── NEON kernel (aarch64 only) ────────────────────────────────────────────────
 
@@ -67,16 +67,10 @@ mod neon_impl {
     /// # Safety
     /// NEON is mandatory on all aarch64 targets per the AArch64 ABI.
     #[target_feature(enable = "neon")]
-    pub(super) unsafe fn gemm_row(
-        a_row: &[f32],
-        b: &[f32],
-        c_row: &mut [f32],
-        k: usize,
-        n: usize,
-    ) {
+    pub(super) unsafe fn gemm_row(a_row: &[f32], b: &[f32], c_row: &mut [f32], k: usize, n: usize) {
         let chunks = n / 4;
-        let tail   = n % 4;
-        let cp     = c_row.as_mut_ptr();
+        let tail = n % 4;
+        let cp = c_row.as_mut_ptr();
 
         // Zero c_row in 4-wide NEON stores.
         let zero = vdupq_n_f32(0.0_f32);
@@ -108,14 +102,7 @@ mod neon_impl {
 
     /// Full GEMM: iterate over M rows, calling `gemm_row` for each.
     #[target_feature(enable = "neon")]
-    pub(super) unsafe fn gemm(
-        a: &[f32],
-        b: &[f32],
-        c: &mut [f32],
-        m: usize,
-        k: usize,
-        n: usize,
-    ) {
+    pub(super) unsafe fn gemm(a: &[f32], b: &[f32], c: &mut [f32], m: usize, k: usize, n: usize) {
         for i in 0..m {
             let a_row = a.get_unchecked(i * k..(i + 1) * k);
             let c_row = std::slice::from_raw_parts_mut(c.as_mut_ptr().add(i * n), n);
@@ -128,9 +115,11 @@ mod neon_impl {
 
 #[cfg(not(target_arch = "aarch64"))]
 fn gemm_scalar_row(a_row: &[f32], b: &[f32], c_row: &mut [f32], k: usize, n: usize) {
-    for j in 0..n { c_row[j] = 0.0; }
+    for j in 0..n {
+        c_row[j] = 0.0;
+    }
     for kk in 0..k {
-        let a_ik  = a_row[kk];
+        let a_ik = a_row[kk];
         let b_row = &b[kk * n..(kk + 1) * n];
         for j in 0..n {
             c_row[j] += a_ik * b_row[j];
@@ -158,14 +147,7 @@ fn gemm_scalar(a: &[f32], b: &[f32], c: &mut [f32], m: usize, k: usize, n: usize
 /// (overwritten — all elements will be zeroed then filled).
 ///
 /// Uses NEON `vfmaq_f32` on aarch64; scalar axpy fallback elsewhere.
-pub(crate) fn neon_gemm_slice(
-    a: &[f32],
-    b: &[f32],
-    c: &mut [f32],
-    m: usize,
-    k: usize,
-    n: usize,
-) {
+pub(crate) fn neon_gemm_slice(a: &[f32], b: &[f32], c: &mut [f32], m: usize, k: usize, n: usize) {
     #[cfg(target_arch = "aarch64")]
     // SAFETY: NEON is mandatory on all aarch64 targets per the AArch64 ABI.
     return unsafe { neon_impl::gemm(a, b, c, m, k, n) };
@@ -184,13 +166,7 @@ pub(crate) fn neon_gemm_slice(
 ///
 /// Uses NEON `vfmaq_f32` on aarch64; scalar axpy fallback elsewhere.
 #[allow(dead_code)]
-pub(crate) fn neon_gemm_row_slice(
-    a_row: &[f32],
-    b: &[f32],
-    c_row: &mut [f32],
-    k: usize,
-    n: usize,
-) {
+pub(crate) fn neon_gemm_row_slice(a_row: &[f32], b: &[f32], c_row: &mut [f32], k: usize, n: usize) {
     #[cfg(target_arch = "aarch64")]
     // SAFETY: NEON is mandatory on all aarch64 targets per the AArch64 ABI.
     return unsafe { neon_impl::gemm_row(a_row, b, c_row, k, n) };
@@ -220,7 +196,8 @@ pub fn matmul_neon_f32(a: &Tensor<f32>, b: &Tensor<f32>) -> Result<Tensor<f32>> 
         return Err(TensorError::InvalidShape {
             reason: format!(
                 "matmul_neon_f32: `a` must be 2-D, got {}D (shape {:?})",
-                a.ndim(), a.dims()
+                a.ndim(),
+                a.dims()
             ),
         });
     }
@@ -228,21 +205,30 @@ pub fn matmul_neon_f32(a: &Tensor<f32>, b: &Tensor<f32>) -> Result<Tensor<f32>> 
         return Err(TensorError::InvalidShape {
             reason: format!(
                 "matmul_neon_f32: `b` must be 2-D, got {}D (shape {:?})",
-                b.ndim(), b.dims()
+                b.ndim(),
+                b.dims()
             ),
         });
     }
-    let [m, k]  = [a.dims()[0], a.dims()[1]];
+    let [m, k] = [a.dims()[0], a.dims()[1]];
     let [k2, n] = [b.dims()[0], b.dims()[1]];
     if k != k2 {
         return Err(TensorError::ShapeMismatch {
             expected: vec![m, k],
-            got:      vec![k2, n],
+            got: vec![k2, n],
         });
     }
 
-    let a_c: Cow<Tensor<f32>> = if a.is_contiguous() { Cow::Borrowed(a) } else { Cow::Owned(a.contiguous()) };
-    let b_c: Cow<Tensor<f32>> = if b.is_contiguous() { Cow::Borrowed(b) } else { Cow::Owned(b.contiguous()) };
+    let a_c: Cow<Tensor<f32>> = if a.is_contiguous() {
+        Cow::Borrowed(a)
+    } else {
+        Cow::Owned(a.contiguous())
+    };
+    let b_c: Cow<Tensor<f32>> = if b.is_contiguous() {
+        Cow::Borrowed(b)
+    } else {
+        Cow::Owned(b.contiguous())
+    };
 
     let mut c_data = vec![0.0_f32; m * n];
     neon_gemm_slice(a_c.as_slice(), b_c.as_slice(), &mut c_data, m, k, n);
@@ -258,25 +244,34 @@ mod tests {
 
     const REL_TOL: f32 = 1e-4;
 
-    fn close(a: f32, b: f32) -> bool { (a - b).abs() < 1e-5 }
+    fn close(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-5
+    }
 
     fn assert_matches_naive(a: &Tensor<f32>, b: &Tensor<f32>) {
         let expected = matmul_naive(a, b).unwrap();
-        let got      = matmul_neon_f32(a, b).unwrap();
+        let got = matmul_neon_f32(a, b).unwrap();
         assert_eq!(got.dims(), expected.dims(), "shape mismatch");
         for (idx, (g, e)) in got.as_slice().iter().zip(expected.as_slice()).enumerate() {
             let denom = g.abs().max(e.abs()).max(1.0);
-            let rel   = (g - e).abs() / denom;
-            assert!(rel < REL_TOL, "elem {idx}: neon={g} naive={e} rel={rel:.2e}");
+            let rel = (g - e).abs() / denom;
+            assert!(
+                rel < REL_TOL,
+                "elem {idx}: neon={g} naive={e} rel={rel:.2e}"
+            );
         }
     }
 
     #[test]
     fn test_2x2_identity() {
-        let a  = Tensor::from_vec(vec![1.0_f32, 2.0, 3.0, 4.0], vec![2, 2]).unwrap();
+        let a = Tensor::from_vec(vec![1.0_f32, 2.0, 3.0, 4.0], vec![2, 2]).unwrap();
         let id = Tensor::from_vec(vec![1.0_f32, 0.0, 0.0, 1.0], vec![2, 2]).unwrap();
-        let c  = matmul_neon_f32(&a, &id).unwrap();
-        assert!(c.as_slice().iter().zip(&[1.0_f32, 2.0, 3.0, 4.0]).all(|(g, e)| close(*g, *e)));
+        let c = matmul_neon_f32(&a, &id).unwrap();
+        assert!(c
+            .as_slice()
+            .iter()
+            .zip(&[1.0_f32, 2.0, 3.0, 4.0])
+            .all(|(g, e)| close(*g, *e)));
     }
 
     #[test]
@@ -284,7 +279,11 @@ mod tests {
         let a = Tensor::from_vec(vec![1.0_f32, 2.0, 3.0, 4.0], vec![2, 2]).unwrap();
         let b = Tensor::from_vec(vec![5.0_f32, 6.0, 7.0, 8.0], vec![2, 2]).unwrap();
         let c = matmul_neon_f32(&a, &b).unwrap();
-        assert!(c.as_slice().iter().zip(&[19.0_f32, 22.0, 43.0, 50.0]).all(|(g, e)| close(*g, *e)));
+        assert!(c
+            .as_slice()
+            .iter()
+            .zip(&[19.0_f32, 22.0, 43.0, 50.0])
+            .all(|(g, e)| close(*g, *e)));
     }
 
     #[test]
@@ -298,32 +297,48 @@ mod tests {
     fn test_matches_naive_n_not_multiple_of_4() {
         // N=13: 3 full 4-wide chunks + 1-element scalar tail.
         let (m, k, n) = (4, 16, 13);
-        let a = Tensor::from_vec((0..m*k).map(|i| i as f32 * 0.1).collect(), vec![m, k]).unwrap();
-        let b = Tensor::from_vec((0..k*n).map(|i| i as f32 * 0.05).collect(), vec![k, n]).unwrap();
+        let a = Tensor::from_vec((0..m * k).map(|i| i as f32 * 0.1).collect(), vec![m, k]).unwrap();
+        let b =
+            Tensor::from_vec((0..k * n).map(|i| i as f32 * 0.05).collect(), vec![k, n]).unwrap();
         assert_matches_naive(&a, &b);
     }
 
     #[test]
     fn test_matches_naive_square_32() {
         let n = 32_usize;
-        let a = Tensor::from_vec((0..n*n).map(|i| i as f32 * 0.01).collect(), vec![n, n]).unwrap();
-        let b = Tensor::from_vec((0..n*n).map(|i| (n*n - i) as f32 * 0.005).collect(), vec![n, n]).unwrap();
+        let a =
+            Tensor::from_vec((0..n * n).map(|i| i as f32 * 0.01).collect(), vec![n, n]).unwrap();
+        let b = Tensor::from_vec(
+            (0..n * n).map(|i| (n * n - i) as f32 * 0.005).collect(),
+            vec![n, n],
+        )
+        .unwrap();
         assert_matches_naive(&a, &b);
     }
 
     #[test]
     fn test_matches_naive_square_128() {
         let n = 128_usize;
-        let a = Tensor::from_vec((0..n*n).map(|i| i as f32 * 0.001).collect(), vec![n, n]).unwrap();
-        let b = Tensor::from_vec((0..n*n).map(|i| (n*n - i) as f32 * 0.001).collect(), vec![n, n]).unwrap();
+        let a =
+            Tensor::from_vec((0..n * n).map(|i| i as f32 * 0.001).collect(), vec![n, n]).unwrap();
+        let b = Tensor::from_vec(
+            (0..n * n).map(|i| (n * n - i) as f32 * 0.001).collect(),
+            vec![n, n],
+        )
+        .unwrap();
         assert_matches_naive(&a, &b);
     }
 
     #[test]
     fn test_matches_naive_rectangular() {
         let (m, k, n) = (50, 70, 40);
-        let a = Tensor::from_vec((0..m*k).map(|i| i as f32 * 0.003).collect(), vec![m, k]).unwrap();
-        let b = Tensor::from_vec((0..k*n).map(|i| (k*n-i) as f32 * 0.002).collect(), vec![k, n]).unwrap();
+        let a =
+            Tensor::from_vec((0..m * k).map(|i| i as f32 * 0.003).collect(), vec![m, k]).unwrap();
+        let b = Tensor::from_vec(
+            (0..k * n).map(|i| (k * n - i) as f32 * 0.002).collect(),
+            vec![k, n],
+        )
+        .unwrap();
         assert_matches_naive(&a, &b);
     }
 
@@ -331,32 +346,50 @@ mod tests {
     fn test_matches_naive_projection_shape() {
         // Scaled-down projection: seq=4, hidden=64, ffn=128
         let (m, k, n) = (4, 64, 128);
-        let a = Tensor::from_vec((0..m*k).map(|i| (i as f32)*0.01 - 0.3).collect(), vec![m, k]).unwrap();
-        let b = Tensor::from_vec((0..k*n).map(|i| (i as f32)*0.005 - 0.15).collect(), vec![k, n]).unwrap();
+        let a = Tensor::from_vec(
+            (0..m * k).map(|i| (i as f32) * 0.01 - 0.3).collect(),
+            vec![m, k],
+        )
+        .unwrap();
+        let b = Tensor::from_vec(
+            (0..k * n).map(|i| (i as f32) * 0.005 - 0.15).collect(),
+            vec![k, n],
+        )
+        .unwrap();
         assert_matches_naive(&a, &b);
     }
 
     #[test]
     fn test_non_contiguous_transpose_a() {
-        let a   = Tensor::from_vec(vec![1.0_f32, 3.0, 2.0, 4.0], vec![2, 2]).unwrap();
+        let a = Tensor::from_vec(vec![1.0_f32, 3.0, 2.0, 4.0], vec![2, 2]).unwrap();
         let a_t = a.transpose(0, 1).unwrap();
-        let id  = Tensor::from_vec(vec![1.0_f32, 0.0, 0.0, 1.0], vec![2, 2]).unwrap();
-        let c   = matmul_neon_f32(&a_t, &id).unwrap();
-        assert!(c.as_slice().iter().zip(&[1.0_f32, 2.0, 3.0, 4.0]).all(|(g, e)| close(*g, *e)));
+        let id = Tensor::from_vec(vec![1.0_f32, 0.0, 0.0, 1.0], vec![2, 2]).unwrap();
+        let c = matmul_neon_f32(&a_t, &id).unwrap();
+        assert!(c
+            .as_slice()
+            .iter()
+            .zip(&[1.0_f32, 2.0, 3.0, 4.0])
+            .all(|(g, e)| close(*g, *e)));
     }
 
     #[test]
     fn test_shape_mismatch_error() {
         let a = Tensor::from_vec(vec![1.0_f32; 4], vec![2, 2]).unwrap();
         let b = Tensor::from_vec(vec![1.0_f32; 3], vec![3, 1]).unwrap();
-        assert!(matches!(matmul_neon_f32(&a, &b), Err(TensorError::ShapeMismatch { .. })));
+        assert!(matches!(
+            matmul_neon_f32(&a, &b),
+            Err(TensorError::ShapeMismatch { .. })
+        ));
     }
 
     #[test]
     fn test_non_2d_error() {
         let a = Tensor::from_vec(vec![1.0_f32; 8], vec![2, 2, 2]).unwrap();
         let b = Tensor::from_vec(vec![1.0_f32; 4], vec![2, 2]).unwrap();
-        assert!(matches!(matmul_neon_f32(&a, &b), Err(TensorError::InvalidShape { .. })));
+        assert!(matches!(
+            matmul_neon_f32(&a, &b),
+            Err(TensorError::InvalidShape { .. })
+        ));
     }
 
     #[test]
@@ -364,14 +397,27 @@ mod tests {
         // On aarch64 avx2 falls back to blocked; this verifies neon and blocked agree.
         use crate::ops::matmul::matmul_avx2;
         let (m, k, n) = (8, 32, 16);
-        let a = Tensor::from_vec((0..m*k).map(|i| i as f32 * 0.01).collect(), vec![m, k]).unwrap();
-        let b = Tensor::from_vec((0..k*n).map(|i| (k*n-i) as f32 * 0.01).collect(), vec![k, n]).unwrap();
+        let a =
+            Tensor::from_vec((0..m * k).map(|i| i as f32 * 0.01).collect(), vec![m, k]).unwrap();
+        let b = Tensor::from_vec(
+            (0..k * n).map(|i| (k * n - i) as f32 * 0.01).collect(),
+            vec![k, n],
+        )
+        .unwrap();
         let neon_out = matmul_neon_f32(&a, &b).unwrap();
         let avx2_out = matmul_avx2(&a, &b).unwrap();
-        for (i, (g, e)) in neon_out.as_slice().iter().zip(avx2_out.as_slice()).enumerate() {
+        for (i, (g, e)) in neon_out
+            .as_slice()
+            .iter()
+            .zip(avx2_out.as_slice())
+            .enumerate()
+        {
             let denom = g.abs().max(e.abs()).max(1.0);
-            let rel   = (g - e).abs() / denom;
-            assert!(rel < REL_TOL, "elem {i}: neon={g} avx2/blocked={e} rel={rel:.2e}");
+            let rel = (g - e).abs() / denom;
+            assert!(
+                rel < REL_TOL,
+                "elem {i}: neon={g} avx2/blocked={e} rel={rel:.2e}"
+            );
         }
     }
 }

@@ -13,14 +13,15 @@
 //!
 //! Any rank ≥ 1.  The operation is elementwise and shape-preserving.
 
-use std::borrow::Cow;
 use crate::tensor::{Result, Tensor, TensorError};
+use std::borrow::Cow;
 
 // ── scalar kernel (pub so SwiGLU can reuse it) ─────────────────────────────
 
 /// Compute `silu(x) = x · sigmoid(x)` for a single `f32`.
 #[inline]
-pub fn silu_scalar(x: f32) -> f32 { // CHANGED
+pub fn silu_scalar(x: f32) -> f32 {
+    // CHANGED
     x / (1.0 + (-x).exp())
 }
 
@@ -57,7 +58,8 @@ pub fn silu(x: &Tensor<f32>) -> Result<Tensor<f32>> {
 /// # Errors
 ///
 /// * [`TensorError::InvalidShape`] if `x` is 0-D or non-contiguous.
-pub fn silu_inplace(x: &mut Tensor<f32>) -> Result<()> { // CHANGED
+pub fn silu_inplace(x: &mut Tensor<f32>) -> Result<()> {
+    // CHANGED
     if x.ndim() == 0 {
         return Err(TensorError::InvalidShape {
             reason: "silu_inplace: input must be at least 1-D".to_string(),
@@ -80,7 +82,9 @@ pub fn silu_inplace(x: &mut Tensor<f32>) -> Result<()> { // CHANGED
 mod tests {
     use super::*;
 
-    fn close(a: f32, b: f32, tol: f32) -> bool { (a - b).abs() < tol }
+    fn close(a: f32, b: f32, tol: f32) -> bool {
+        (a - b).abs() < tol
+    }
 
     // ── scalar kernel ─────────────────────────────────────────────────────
 
@@ -108,11 +112,17 @@ mod tests {
         // CHANGED: cross-check with PyTorch:
         //   import torch; torch.nn.functional.silu(torch.tensor([1., -1., 2., -2.]))
         //   → [0.7311, -0.2689,  1.7616, -0.2384]
-        let cases = [(1.0_f32, 0.731_059), (-1.0, -0.268_941), (2.0, 1.761_594), (-2.0, -0.238_406)];
+        let cases = [
+            (1.0_f32, 0.731_059),
+            (-1.0, -0.268_941),
+            (2.0, 1.761_594),
+            (-2.0, -0.238_406),
+        ];
         for (x, expected) in cases {
             assert!(
                 close(silu_scalar(x), expected, 1e-5),
-                "silu({x}) = {}, expected {expected}", silu_scalar(x)
+                "silu({x}) = {}, expected {expected}",
+                silu_scalar(x)
             );
         }
     }
@@ -137,7 +147,7 @@ mod tests {
     fn test_silu_values_match_scalar() {
         // CHANGED: tensor version must apply the scalar kernel to each element
         let data = vec![-2.0_f32, -1.0, 0.0, 1.0, 2.0];
-        let x   = Tensor::from_vec(data.clone(), vec![5]).unwrap();
+        let x = Tensor::from_vec(data.clone(), vec![5]).unwrap();
         let out = silu(&x).unwrap();
         for (&got, &raw) in out.as_slice().iter().zip(data.iter()) {
             assert!(close(got, silu_scalar(raw), 1e-7), "element mismatch");
@@ -148,11 +158,14 @@ mod tests {
     fn test_silu_non_contiguous_input() {
         // CHANGED: transposed (strided) input must still produce correct output
         let x_orig = Tensor::from_vec(vec![1.0_f32, 2.0, 3.0, 4.0], vec![2, 2]).unwrap();
-        let x_t    = x_orig.transpose(0, 1).unwrap();
-        let out    = silu(&x_t).unwrap();
+        let x_t = x_orig.transpose(0, 1).unwrap();
+        let out = silu(&x_t).unwrap();
         assert_eq!(out.dims(), &[2, 2]);
         // Contiguous layout of transposed [[1,3],[2,4]] → elements [1,3,2,4]
-        let expected: Vec<f32> = [1.0_f32, 3.0, 2.0, 4.0].iter().map(|&v| silu_scalar(v)).collect();
+        let expected: Vec<f32> = [1.0_f32, 3.0, 2.0, 4.0]
+            .iter()
+            .map(|&v| silu_scalar(v))
+            .collect();
         for (&got, exp) in out.as_slice().iter().zip(expected.iter()) {
             assert!(close(got, *exp, 1e-6));
         }
@@ -183,7 +196,7 @@ mod tests {
     fn test_silu_no_nan_inf() {
         // CHANGED: large positive and negative values must not produce NaN/Inf
         let data: Vec<f32> = vec![-100.0, -50.0, 0.0, 50.0, 100.0];
-        let x   = Tensor::from_vec(data, vec![5]).unwrap();
+        let x = Tensor::from_vec(data, vec![5]).unwrap();
         let out = silu(&x).unwrap();
         for &v in out.as_slice() {
             assert!(!v.is_nan(), "NaN in silu output");

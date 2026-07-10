@@ -23,9 +23,9 @@
 //!
 //! `gate` and `up` must have identical shapes.  Any rank ≥ 1 is accepted.
 
-use std::borrow::Cow;
+use super::silu::silu_scalar;
 use crate::tensor::{Result, Tensor, TensorError};
-use super::silu::silu_scalar; // CHANGED: reuse the scalar kernel
+use std::borrow::Cow; // CHANGED: reuse the scalar kernel
 
 // ── allocating ─────────────────────────────────────────────────────────────
 
@@ -40,8 +40,16 @@ pub fn swiglu(gate: &Tensor<f32>, up: &Tensor<f32>) -> Result<Tensor<f32>> {
     validate(gate, up)?;
 
     // CHANGED: contiguity gate — borrow when already contiguous
-    let g: Cow<Tensor<f32>> = if gate.is_contiguous() { Cow::Borrowed(gate) } else { Cow::Owned(gate.contiguous()) };
-    let u: Cow<Tensor<f32>> = if up.is_contiguous()   { Cow::Borrowed(up)   } else { Cow::Owned(up.contiguous())   };
+    let g: Cow<Tensor<f32>> = if gate.is_contiguous() {
+        Cow::Borrowed(gate)
+    } else {
+        Cow::Owned(gate.contiguous())
+    };
+    let u: Cow<Tensor<f32>> = if up.is_contiguous() {
+        Cow::Borrowed(up)
+    } else {
+        Cow::Owned(up.contiguous())
+    };
 
     let out: Vec<f32> = g.as_slice()
         .iter()
@@ -61,7 +69,8 @@ pub fn swiglu(gate: &Tensor<f32>, up: &Tensor<f32>) -> Result<Tensor<f32>> {
 ///
 /// * [`TensorError::InvalidShape`] if either tensor is 0-D or non-contiguous.
 /// * [`TensorError::ShapeMismatch`] if shapes differ.
-pub fn swiglu_inplace(gate: &mut Tensor<f32>, up: &Tensor<f32>) -> Result<()> { // CHANGED
+pub fn swiglu_inplace(gate: &mut Tensor<f32>, up: &Tensor<f32>) -> Result<()> {
+    // CHANGED
     validate(gate, up)?;
 
     if !gate.is_contiguous() {
@@ -84,7 +93,8 @@ pub fn swiglu_inplace(gate: &mut Tensor<f32>, up: &Tensor<f32>) -> Result<()> { 
 
 // ── shared validation ───────────────────────────────────────────────────────
 
-fn validate(gate: &Tensor<f32>, up: &Tensor<f32>) -> Result<()> { // CHANGED
+fn validate(gate: &Tensor<f32>, up: &Tensor<f32>) -> Result<()> {
+    // CHANGED
     if gate.ndim() == 0 {
         return Err(TensorError::InvalidShape {
             reason: "swiglu: gate must be at least 1-D".to_string(),
@@ -98,7 +108,7 @@ fn validate(gate: &Tensor<f32>, up: &Tensor<f32>) -> Result<()> { // CHANGED
     if gate.shape() != up.shape() {
         return Err(TensorError::ShapeMismatch {
             expected: gate.dims().to_vec(),
-            got:      up.dims().to_vec(),
+            got: up.dims().to_vec(),
         });
     }
     Ok(())
@@ -108,10 +118,12 @@ fn validate(gate: &Tensor<f32>, up: &Tensor<f32>) -> Result<()> { // CHANGED
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::silu::silu_scalar;
+    use super::*;
 
-    fn close(a: f32, b: f32, tol: f32) -> bool { (a - b).abs() < tol }
+    fn close(a: f32, b: f32, tol: f32) -> bool {
+        (a - b).abs() < tol
+    }
 
     // ── correctness ───────────────────────────────────────────────────────
 
@@ -119,8 +131,8 @@ mod tests {
     fn test_swiglu_known_values() {
         // CHANGED: swiglu([1,-1], [2,3]) = [silu(1)*2, silu(-1)*3]
         let gate = Tensor::from_vec(vec![1.0_f32, -1.0], vec![2]).unwrap();
-        let up   = Tensor::from_vec(vec![2.0_f32,  3.0], vec![2]).unwrap();
-        let out  = swiglu(&gate, &up).unwrap();
+        let up = Tensor::from_vec(vec![2.0_f32, 3.0], vec![2]).unwrap();
+        let out = swiglu(&gate, &up).unwrap();
         let expected = [silu_scalar(1.0) * 2.0, silu_scalar(-1.0) * 3.0];
         for (&got, &exp) in out.as_slice().iter().zip(expected.iter()) {
             assert!(close(got, exp, 1e-6));
@@ -132,8 +144,8 @@ mod tests {
         // CHANGED: up = 1 → swiglu == silu(gate)
         let data = vec![-2.0_f32, -1.0, 0.0, 1.0, 2.0];
         let gate = Tensor::from_vec(data.clone(), vec![5]).unwrap();
-        let up   = Tensor::ones(vec![5]);
-        let out  = swiglu(&gate, &up).unwrap();
+        let up = Tensor::ones(vec![5]);
+        let out = swiglu(&gate, &up).unwrap();
         for (&got, &raw) in out.as_slice().iter().zip(data.iter()) {
             assert!(close(got, silu_scalar(raw), 1e-7));
         }
@@ -143,8 +155,8 @@ mod tests {
     fn test_swiglu_gate_zero_zeroes_output() {
         // silu(0) = 0 → output all zeros regardless of up
         let gate = Tensor::zeros(vec![4]);
-        let up   = Tensor::from_vec(vec![1.0_f32, 2.0, 3.0, 4.0], vec![4]).unwrap();
-        let out  = swiglu(&gate, &up).unwrap();
+        let up = Tensor::from_vec(vec![1.0_f32, 2.0, 3.0, 4.0], vec![4]).unwrap();
+        let out = swiglu(&gate, &up).unwrap();
         for &v in out.as_slice() {
             assert!(close(v, 0.0, 1e-7), "expected 0.0, got {v}");
         }
@@ -155,9 +167,17 @@ mod tests {
     #[test]
     fn test_swiglu_shape_preserved_2d() {
         let (seq, d) = (4, 8);
-        let gate = Tensor::from_vec((0..(seq*d)).map(|i| i as f32 * 0.1 - 2.0).collect(), vec![seq, d]).unwrap();
-        let up   = Tensor::from_vec((0..(seq*d)).map(|i| i as f32 * 0.05 + 1.0).collect(), vec![seq, d]).unwrap();
-        let out  = swiglu(&gate, &up).unwrap();
+        let gate = Tensor::from_vec(
+            (0..(seq * d)).map(|i| i as f32 * 0.1 - 2.0).collect(),
+            vec![seq, d],
+        )
+        .unwrap();
+        let up = Tensor::from_vec(
+            (0..(seq * d)).map(|i| i as f32 * 0.05 + 1.0).collect(),
+            vec![seq, d],
+        )
+        .unwrap();
+        let out = swiglu(&gate, &up).unwrap();
         assert_eq!(out.dims(), &[seq, d]);
     }
 
@@ -166,8 +186,8 @@ mod tests {
         // CHANGED: transposed inputs must still give correct result
         let g_orig = Tensor::from_vec(vec![1.0_f32, 2.0, 3.0, 4.0], vec![2, 2]).unwrap();
         let u_orig = Tensor::from_vec(vec![1.0_f32; 4], vec![2, 2]).unwrap();
-        let g_t    = g_orig.transpose(0, 1).unwrap();
-        let u_t    = u_orig.transpose(0, 1).unwrap();
+        let g_t = g_orig.transpose(0, 1).unwrap();
+        let u_t = u_orig.transpose(0, 1).unwrap();
         // Both non-contiguous — allocating version must handle it
         let out = swiglu(&g_t, &u_t).unwrap();
         assert_eq!(out.dims(), &[2, 2]);
@@ -178,11 +198,11 @@ mod tests {
     #[test]
     fn test_swiglu_inplace_matches_allocating() {
         let g_data = vec![-1.0_f32, 0.5, 1.5, -0.3];
-        let u_data = vec![ 2.0_f32, 1.0, 0.5,  3.0];
+        let u_data = vec![2.0_f32, 1.0, 0.5, 3.0];
         let gate_alloc = Tensor::from_vec(g_data.clone(), vec![4]).unwrap();
-        let up_alloc   = Tensor::from_vec(u_data.clone(), vec![4]).unwrap();
+        let up_alloc = Tensor::from_vec(u_data.clone(), vec![4]).unwrap();
         let mut gate_ip = Tensor::from_vec(g_data, vec![4]).unwrap();
-        let up_ip       = Tensor::from_vec(u_data, vec![4]).unwrap();
+        let up_ip = Tensor::from_vec(u_data, vec![4]).unwrap();
 
         let out_alloc = swiglu(&gate_alloc, &up_alloc).unwrap();
         swiglu_inplace(&mut gate_ip, &up_ip).unwrap();
@@ -203,8 +223,8 @@ mod tests {
     #[test]
     fn test_swiglu_inplace_rejects_strided_up() {
         let mut gate = Tensor::ones(vec![2, 2]);
-        let u_orig   = Tensor::from_vec(vec![1.0_f32; 4], vec![2, 2]).unwrap();
-        let u_t      = u_orig.transpose(0, 1).unwrap();
+        let u_orig = Tensor::from_vec(vec![1.0_f32; 4], vec![2, 2]).unwrap();
+        let u_t = u_orig.transpose(0, 1).unwrap();
         assert!(swiglu_inplace(&mut gate, &u_t).is_err());
     }
 
@@ -213,8 +233,11 @@ mod tests {
     #[test]
     fn test_swiglu_shape_mismatch() {
         let gate = Tensor::from_vec(vec![1.0_f32; 4], vec![4]).unwrap();
-        let up   = Tensor::from_vec(vec![1.0_f32; 6], vec![6]).unwrap();
-        assert!(matches!(swiglu(&gate, &up), Err(TensorError::ShapeMismatch { .. })));
+        let up = Tensor::from_vec(vec![1.0_f32; 6], vec![6]).unwrap();
+        assert!(matches!(
+            swiglu(&gate, &up),
+            Err(TensorError::ShapeMismatch { .. })
+        ));
     }
 
     #[test]
@@ -222,8 +245,8 @@ mod tests {
         // CHANGED: extreme values must not produce NaN/Inf
         let data: Vec<f32> = vec![-100.0, -50.0, 0.0, 50.0, 100.0];
         let gate = Tensor::from_vec(data.clone(), vec![5]).unwrap();
-        let up   = Tensor::from_vec(data, vec![5]).unwrap();
-        let out  = swiglu(&gate, &up).unwrap();
+        let up = Tensor::from_vec(data, vec![5]).unwrap();
+        let out = swiglu(&gate, &up).unwrap();
         for &v in out.as_slice() {
             assert!(!v.is_nan(), "NaN in swiglu output");
             assert!(!v.is_infinite(), "Inf in swiglu output");
@@ -241,8 +264,8 @@ mod tests {
         //   F.silu(gate) * up
         //   → [0.7311, 0.8808, -0.5379, -0.7151]
         let gate = Tensor::from_vec(vec![1.0_f32, 2.0, -1.0, -2.0], vec![4]).unwrap();
-        let up   = Tensor::from_vec(vec![1.0_f32, 0.5,  2.0,  3.0], vec![4]).unwrap();
-        let out  = swiglu(&gate, &up).unwrap();
+        let up = Tensor::from_vec(vec![1.0_f32, 0.5, 2.0, 3.0], vec![4]).unwrap();
+        let out = swiglu(&gate, &up).unwrap();
         let expected = [0.731_059, 0.880_797, -0.537_882, -0.715_219];
         for (&got, &exp) in out.as_slice().iter().zip(expected.iter()) {
             assert!(close(got, exp, 1e-4), "got {got}, expected {exp}");

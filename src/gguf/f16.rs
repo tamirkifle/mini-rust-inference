@@ -325,8 +325,8 @@ pub const fn f16_mantissa(bits: u16) -> u16 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::constants::*;
+    use super::*;
 
     const EPSILON: f32 = 1e-3;
 
@@ -353,7 +353,13 @@ mod tests {
 
     #[test]
     fn test_f16_to_f32_batch_special_values() {
-        let f16_bits = vec![F16_ZERO, F16_NEG_ZERO, F16_INFINITY, F16_NEG_INFINITY, F16_NAN];
+        let f16_bits = vec![
+            F16_ZERO,
+            F16_NEG_ZERO,
+            F16_INFINITY,
+            F16_NEG_INFINITY,
+            F16_NAN,
+        ];
         let result = f16_to_f32_batch(&f16_bits);
 
         assert!(approx_eq(result[0], 0.0));
@@ -483,7 +489,7 @@ mod tests {
         for &val in &test_values {
             let f16_bits = f32_to_f16(val);
             let back = f16_to_f32(f16_bits);
-            
+
             if val == 0.0 {
                 assert!(back == 0.0 || back == -0.0);
             } else {
@@ -502,9 +508,7 @@ mod tests {
     fn test_large_batch_conversion() {
         // Test with a larger batch to verify performance path
         let count = 10000;
-        let f16_bits: Vec<u16> = (0..count)
-            .map(|i| f32_to_f16((i as f32) / 100.0))
-            .collect();
+        let f16_bits: Vec<u16> = (0..count).map(|i| f32_to_f16((i as f32) / 100.0)).collect();
 
         let result = f16_to_f32_batch(&f16_bits);
 

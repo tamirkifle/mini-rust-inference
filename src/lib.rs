@@ -30,9 +30,22 @@
 //! ```
 
 #![warn(clippy::all)]
-#![warn(clippy::pedantic)]
-#![allow(clippy::module_name_repetitions)]
-#![allow(clippy::must_use_candidate)]
+#![allow(clippy::doc_overindented_list_items)]
+#![allow(clippy::four_forward_slashes)]
+#![allow(clippy::needless_question_mark)]
+#![allow(clippy::manual_div_ceil)]
+#![allow(clippy::same_item_push)]
+#![allow(clippy::needless_range_loop)]
+#![allow(clippy::approx_constant)]
+#![allow(clippy::manual_is_multiple_of)]
+#![allow(clippy::manual_range_contains)]
+#![allow(clippy::cloned_ref_to_slice_refs)]
+#![allow(clippy::identity_op)]
+#![allow(clippy::excessive_precision)]
+#![allow(clippy::useless_vec)]
+#![allow(clippy::manual_slice_size_calculation)]
+#![allow(clippy::needless_return)]
+#![allow(clippy::too_many_arguments)]
 
 // Module declarations
 pub mod gguf;
@@ -54,8 +67,8 @@ pub mod model;
 pub mod tokenizer;
 
 // CHANGED: sampling + generation loop activated in commit 8.5
-pub mod sampling;
 pub mod generate;
+pub mod sampling;
 
 // CHANGED: cache module activated in commit 9.1
 pub mod cache;

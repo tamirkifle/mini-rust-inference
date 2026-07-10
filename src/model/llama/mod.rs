@@ -20,10 +20,10 @@ pub mod parallel_prefill;
 pub mod forward_int8;
 
 // Re-exports for convenience
-pub use config::LlamaConfig;
-pub use weights::{GlobalWeightRole, WeightRole, global_weight_name, weight_name};
 pub use block::TransformerBlock;
+pub use config::LlamaConfig;
 pub use forward::LlamaModel;
 pub use forward_int8::{LlamaModelInt8, TransformerBlockInt8};
-pub use prefill::ChunkedPrefill;
 pub use parallel_prefill::ParallelPrefill;
+pub use prefill::ChunkedPrefill;
+pub use weights::{global_weight_name, weight_name, GlobalWeightRole, WeightRole};

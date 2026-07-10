@@ -66,19 +66,29 @@ impl LlamaConfig {
     pub fn from_metadata(meta: &Metadata) -> Result<Self> {
         // ── required fields ────────────────────────────────────────────────
         let block_count = get_u32_wide(meta, "llama.block_count") // CHANGED
-            .ok_or(ModelError::MissingMetadataKey { key: "llama.block_count" })?;
+            .ok_or(ModelError::MissingMetadataKey {
+                key: "llama.block_count",
+            })?;
 
         let embedding_length = get_u32_wide(meta, "llama.embedding_length") // CHANGED
-            .ok_or(ModelError::MissingMetadataKey { key: "llama.embedding_length" })?;
+            .ok_or(ModelError::MissingMetadataKey {
+                key: "llama.embedding_length",
+            })?;
 
         let n_heads = get_u32_wide(meta, "llama.attention.head_count") // CHANGED
-            .ok_or(ModelError::MissingMetadataKey { key: "llama.attention.head_count" })?;
+            .ok_or(ModelError::MissingMetadataKey {
+                key: "llama.attention.head_count",
+            })?;
 
         let feed_forward_length = get_u32_wide(meta, "llama.feed_forward_length") // CHANGED
-            .ok_or(ModelError::MissingMetadataKey { key: "llama.feed_forward_length" })?;
+            .ok_or(ModelError::MissingMetadataKey {
+                key: "llama.feed_forward_length",
+            })?;
 
         let context_length = get_u32_wide(meta, "llama.context_length") // CHANGED
-            .ok_or(ModelError::MissingMetadataKey { key: "llama.context_length" })?;
+            .ok_or(ModelError::MissingMetadataKey {
+                key: "llama.context_length",
+            })?;
 
         // ── optional / derived fields ──────────────────────────────────────
         // n_kv_heads: falls back to n_heads (standard MHA) if not present
@@ -92,7 +102,9 @@ impl LlamaConfig {
                     .and_then(|v| v.as_string_array())
                     .map(|a| a.len() as u32)
             })
-            .ok_or(ModelError::MissingMetadataKey { key: "llama.vocab_size" })?;
+            .ok_or(ModelError::MissingMetadataKey {
+                key: "llama.vocab_size",
+            })?;
 
         let rope_freq_base = meta.get_f32("llama.rope.freq_base") // CHANGED
             .unwrap_or(10_000.0);
@@ -115,13 +127,12 @@ impl LlamaConfig {
         }
         if n_kv_heads == 0 || n_heads % n_kv_heads != 0 {
             return Err(ModelError::InvalidConfig {
-                reason: format!(
-                    "n_heads {n_heads} not divisible by n_kv_heads {n_kv_heads}"
-                ),
+                reason: format!("n_heads {n_heads} not divisible by n_kv_heads {n_kv_heads}"),
             });
         }
 
-        Ok(Self { // CHANGED
+        Ok(Self {
+            // CHANGED
             block_count,
             embedding_length,
             n_heads,
@@ -138,7 +149,8 @@ impl LlamaConfig {
 // ── private helpers ──────────────────────────────────────────────────────────
 
 /// Read a metadata value as u32, accepting u8/u16/u32/u64 (with range check).
-fn get_u32_wide(meta: &Metadata, key: &str) -> Option<u32> { // CHANGED
+fn get_u32_wide(meta: &Metadata, key: &str) -> Option<u32> {
+    // CHANGED
     meta.get_u32(key)
         .or_else(|| meta.get_u64(key).and_then(|v| u32::try_from(v).ok()))
 }
@@ -160,40 +172,43 @@ mod tests {
 
     fn minimal_entries() -> Vec<(&'static str, MetadataValue)> {
         vec![
-            ("llama.block_count",         MetadataValue::Uint32(32)),
-            ("llama.embedding_length",    MetadataValue::Uint32(4096)),
-            ("llama.attention.head_count",MetadataValue::Uint32(32)),
+            ("llama.block_count", MetadataValue::Uint32(32)),
+            ("llama.embedding_length", MetadataValue::Uint32(4096)),
+            ("llama.attention.head_count", MetadataValue::Uint32(32)),
             ("llama.feed_forward_length", MetadataValue::Uint32(11008)),
-            ("llama.context_length",      MetadataValue::Uint32(4096)),
-            ("llama.vocab_size",          MetadataValue::Uint32(32000)),
+            ("llama.context_length", MetadataValue::Uint32(4096)),
+            ("llama.vocab_size", MetadataValue::Uint32(32000)),
         ]
     }
 
     #[test]
-    fn test_config_from_minimal_metadata() { // CHANGED
+    fn test_config_from_minimal_metadata() {
+        // CHANGED
         let meta = make_meta(&minimal_entries());
         let cfg = LlamaConfig::from_metadata(&meta).unwrap();
 
-        assert_eq!(cfg.block_count,         32);
-        assert_eq!(cfg.embedding_length,    4096);
-        assert_eq!(cfg.n_heads,             32);
-        assert_eq!(cfg.n_kv_heads,          32); // defaults to n_heads
+        assert_eq!(cfg.block_count, 32);
+        assert_eq!(cfg.embedding_length, 4096);
+        assert_eq!(cfg.n_heads, 32);
+        assert_eq!(cfg.n_kv_heads, 32); // defaults to n_heads
         assert_eq!(cfg.feed_forward_length, 11008);
-        assert_eq!(cfg.context_length,      4096);
-        assert_eq!(cfg.vocab_size,          32000);
+        assert_eq!(cfg.context_length, 4096);
+        assert_eq!(cfg.vocab_size, 32000);
         assert!((cfg.rope_freq_base - 10_000.0).abs() < 1e-6);
-        assert!((cfg.rms_norm_eps   - 1e-5).abs()     < 1e-10);
+        assert!((cfg.rms_norm_eps - 1e-5).abs() < 1e-10);
     }
 
     #[test]
-    fn test_config_head_dim() { // CHANGED
+    fn test_config_head_dim() {
+        // CHANGED
         let meta = make_meta(&minimal_entries());
         let cfg = LlamaConfig::from_metadata(&meta).unwrap();
         assert_eq!(cfg.head_dim(), 128); // 4096 / 32
     }
 
     #[test]
-    fn test_config_gqa_kv_heads() { // CHANGED
+    fn test_config_gqa_kv_heads() {
+        // CHANGED
         let mut entries = minimal_entries();
         entries.push(("llama.attention.head_count_kv", MetadataValue::Uint32(8)));
         let meta = make_meta(&entries);
@@ -202,7 +217,8 @@ mod tests {
     }
 
     #[test]
-    fn test_config_custom_rope_base() { // CHANGED
+    fn test_config_custom_rope_base() {
+        // CHANGED
         let mut entries = minimal_entries();
         entries.push(("llama.rope.freq_base", MetadataValue::Float32(500_000.0)));
         let meta = make_meta(&entries);
@@ -211,16 +227,21 @@ mod tests {
     }
 
     #[test]
-    fn test_config_custom_rms_eps() { // CHANGED
+    fn test_config_custom_rms_eps() {
+        // CHANGED
         let mut entries = minimal_entries();
-        entries.push(("llama.attention.layer_norm_rms_epsilon", MetadataValue::Float32(1e-6)));
+        entries.push((
+            "llama.attention.layer_norm_rms_epsilon",
+            MetadataValue::Float32(1e-6),
+        ));
         let meta = make_meta(&entries);
         let cfg = LlamaConfig::from_metadata(&meta).unwrap();
         assert!((cfg.rms_norm_eps - 1e-6).abs() < 1e-12);
     }
 
     #[test]
-    fn test_config_vocab_from_token_list() { // CHANGED
+    fn test_config_vocab_from_token_list() {
+        // CHANGED
         // No llama.vocab_size — should be derived from tokenizer.ggml.tokens length
         let tokens: Vec<String> = (0..500).map(|i| format!("tok{i}")).collect();
         let mut entries = minimal_entries();
@@ -233,14 +254,16 @@ mod tests {
     }
 
     #[test]
-    fn test_config_missing_required_key() { // CHANGED
+    fn test_config_missing_required_key() {
+        // CHANGED
         let meta = Metadata::new(); // empty
         let result = LlamaConfig::from_metadata(&meta);
         assert!(matches!(result, Err(ModelError::MissingMetadataKey { .. })));
     }
 
     #[test]
-    fn test_config_invalid_heads_divisibility() { // CHANGED
+    fn test_config_invalid_heads_divisibility() {
+        // CHANGED
         let mut entries = minimal_entries();
         // embedding_length = 4096, n_heads = 7 → 4096 % 7 != 0
         entries.retain(|(k, _)| *k != "llama.attention.head_count");
@@ -251,7 +274,8 @@ mod tests {
     }
 
     #[test]
-    fn test_config_invalid_kv_head_divisibility() { // CHANGED
+    fn test_config_invalid_kv_head_divisibility() {
+        // CHANGED
         let mut entries = minimal_entries();
         // n_heads=32, n_kv_heads=5 → 32 % 5 != 0
         entries.push(("llama.attention.head_count_kv", MetadataValue::Uint32(5)));
@@ -261,7 +285,8 @@ mod tests {
     }
 
     #[test]
-    fn test_config_u64_vocab_size() { // CHANGED: some GGUF files store as uint64
+    fn test_config_u64_vocab_size() {
+        // CHANGED: some GGUF files store as uint64
         let mut entries = minimal_entries();
         entries.retain(|(k, _)| *k != "llama.vocab_size");
         entries.push(("llama.vocab_size", MetadataValue::Uint64(32000)));

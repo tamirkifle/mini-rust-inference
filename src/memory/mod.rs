@@ -6,10 +6,10 @@
 //! - `arena`: Bump allocator for per-forward-pass scratch memory (commit 10.2)
 //! - `stats`: Allocation instrumentation and reporting (commit 10.4)
 
-pub mod pool;
 pub mod arena;
+pub mod pool;
 pub mod stats;
 
-pub use pool::{PoolStats, TensorPool};
 pub use arena::Arena;
+pub use pool::{PoolStats, TensorPool};
 pub use stats::{format_bytes, query_rss, MemorySnapshot, MemoryTracker};
