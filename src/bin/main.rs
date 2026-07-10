@@ -26,6 +26,9 @@
 #![allow(clippy::manual_slice_size_calculation)]
 #![allow(clippy::needless_return)]
 #![allow(clippy::too_many_arguments)]
+#![allow(rustdoc::broken_intra_doc_links)]
+#![allow(rustdoc::private_intra_doc_links)]
+#![allow(rustdoc::invalid_html_tags)]
 
 use llm_engine::gguf::{inspect, GgufLoader};
 use std::process;
